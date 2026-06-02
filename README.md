@@ -1,4 +1,4 @@
-# MA_TAMA
+# MA TAMA
 
 A geodata-driven web application that estimates the probability of TAMA38 for any address in Tel Aviv, helping renters and buyers make informed decisions about their next home.
 
@@ -14,33 +14,82 @@ TAMA38 (National Building Plan 38) grants significant renovation rights and valu
 
 ## Data Source
 
-Building and permit data is fetched from the **Tel Aviv Municipal Engineering Archive**, which contains historical construction records, building permits, and structural metadata. This public data is analyzed to derive features relevant to TAMA38 eligibility (e.g., construction year, number of floors, building footprint, existing permit history).
+Building and permit data is fetched from the **Tel Aviv Municipal Engineering Archive** via its public ArcGIS REST API. The addresses layer (MapServer/527) is ingested into a local PostGIS database, providing street names, building numbers, and building geometries in EPSG:2039 (Israeli TM Grid).
 
 ## How to Run
 
-```
-pip install -r requirements.txt
-python main.py
-```
-
-## Requirements
+### 1. Prerequisites
 
 - Python >= 3.10
-- PostgreSQL + PostGIS
+- PostgreSQL with PostGIS extension
 
-## Structure
+### 2. Install dependencies
 
-- `main.py`
-- `fetch_tlv_addresses.py`
-- `data/`
-- `output/`
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Populate the database
+
+Run the data-fetch script once (or let the scheduled task handle it weekly):
+
+```bash
+python fetch_tlv_addresses.py
+```
+
+This creates the `TLV.addresses` table in the `MA_TAMA` PostgreSQL database.
+
+### 4. Start the web app
+
+```bash
+python app.py
+```
+
+Open [http://localhost:5000](http://localhost:5000) in your browser.
+
+## Web Interface
+
+The app is a Leaflet-based map with an OSM background, served by a lightweight Flask backend.
+
+**Features:**
+- **Address search** — type a street name and building number to locate any address in Tel Aviv
+- **Autocomplete** — both fields query the PostGIS database live for instant suggestions
+- **Map zoom** — on match, the map flies to the building and highlights it with a bold blue outline
+- Geometries are stored in EPSG:2039 and transformed to WGS84 server-side before rendering
+
+## Project Structure
+
+```
+MA_TAMA/
+├── app.py                  # Flask backend + REST API
+├── fetch_tlv_addresses.py  # ArcGIS → PostGIS ingestion script
+├── setup_schedule.ps1      # Windows Task Scheduler setup (weekly refresh)
+├── requirements.txt
+└── templates/
+    └── index.html          # Leaflet UI
+```
+
+## Configuration
+
+Database credentials and target schema are configured at the top of both `app.py` and `fetch_tlv_addresses.py`:
+
+```python
+POSTGIS = {
+    "host":     "localhost",
+    "port":     5432,
+    "database": "MA_TAMA",
+    "user":     "postgres",
+    "password": "mypassword",
+    "schema":   "TLV",
+}
+```
 
 ## Roadmap
 
-- [ ] Construct a working web map interface with basic user interactions
+- [x] Construct a working web map interface with basic user interactions
 - [ ] Create an analysis system based on fetching data from TLV engineering archive
 - [ ] Build a dashboard representing the analysis to the user
-- [ ] Deploy everything using Streamlit and POSTGIS cloud service
+- [ ] Deploy using a PostGIS cloud service
 - [ ] Additional geodata layers as contextual overlays (zoning, proximity to landmarks, demographics)
 - [ ] Neighborhood-level heatmap view
 - [ ] Comparison tool for multiple addresses

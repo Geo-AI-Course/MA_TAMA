@@ -72,6 +72,7 @@ def save_to_postgis(gdf: gpd.GeoDataFrame) -> None:
     )
 
     with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
         conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
 
     gdf.to_postgis(TABLE_NAME, engine, schema=schema, if_exists="replace", index=False)
