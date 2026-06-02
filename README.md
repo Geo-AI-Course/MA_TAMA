@@ -31,11 +31,16 @@ python main.py
 ## Structure
 
 - `main.py`
+- `fetch_tlv_addresses.py`
 - `data/`
 - `output/`
 
 ## Roadmap
 
+- [ ] Construct a working web map interface with basic user interactions
+- [ ] Create an analysis system based on fetching data from TLV engineering archive
+- [ ] Build a dashboard representing the analysis to the user
+- [ ] Deploy everything using Streamlit and POSTGIS cloud service
 - [ ] Additional geodata layers as contextual overlays (zoning, proximity to landmarks, demographics)
 - [ ] Neighborhood-level heatmap view
 - [ ] Comparison tool for multiple addresses
