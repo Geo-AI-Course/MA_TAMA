@@ -15,6 +15,7 @@
       --text:         #0f172a;
       --muted:        #64748b;
       --radius:       10px;
+      --panel-w:      316px;
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -28,7 +29,7 @@
       overflow: hidden;
     }
 
-    /* ── Header ─────────────────────────────────────────── */
+    /* ── Header ──────────────────────────────────────────────────────── */
     header {
       background: var(--surface);
       border-bottom: 1px solid var(--border);
@@ -42,7 +43,6 @@
       box-shadow: 0 1px 4px rgba(0,0,0,.06);
       z-index: 1000;
     }
-
     .logo {
       font-size: 1.1rem;
       font-weight: 700;
@@ -50,25 +50,13 @@
       color: var(--text);
       white-space: nowrap;
     }
-    .logo .accent { color: var(--primary); }
-    .logo .tagline {
-      font-weight: 400;
-      font-size: .8rem;
-      color: var(--muted);
-      letter-spacing: 0;
-      margin-left: 6px;
-    }
+    .logo .accent  { color: var(--primary); }
+    .logo .tagline { font-weight:400; font-size:.8rem; color:var(--muted);
+                     letter-spacing:0; margin-left:6px; }
 
-    /* ── Search bar ──────────────────────────────────────── */
-    .search-bar {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .field {
-      position: relative;
-    }
+    /* ── Search bar ──────────────────────────────────────────────────── */
+    .search-bar { display:flex; align-items:center; gap:8px; }
+    .field { position: relative; }
 
     input[type="text"] {
       height: 38px;
@@ -87,11 +75,10 @@
       box-shadow: 0 0 0 3px rgba(37,99,235,.12);
       background: #fff;
     }
-
     #street-input   { width: 230px; }
     #building-input { width: 110px; }
 
-    /* ── Autocomplete dropdown ───────────────────────────── */
+    /* ── Autocomplete dropdown ───────────────────────────────────────── */
     .dropdown {
       display: none;
       position: absolute;
@@ -107,7 +94,6 @@
       z-index: 3000;
     }
     .dropdown.open { display: block; }
-
     .dropdown-item {
       padding: 9px 13px;
       font-size: .875rem;
@@ -116,13 +102,11 @@
       transition: background .1s;
       white-space: nowrap;
     }
-    .dropdown-item:hover,
-    .dropdown-item.active {
-      background: #eff6ff;
-      color: var(--primary);
+    .dropdown-item:hover, .dropdown-item.active {
+      background: #eff6ff; color: var(--primary);
     }
 
-    /* ── Submit button ───────────────────────────────────── */
+    /* ── Search button ───────────────────────────────────────────────── */
     .btn-search {
       height: 38px;
       padding: 0 20px;
@@ -138,12 +122,12 @@
     }
     .btn-search:hover  { background: var(--primary-dark); }
     .btn-search:active { transform: scale(.97); }
-    .btn-search:disabled { background: #94a3b8; cursor: not-allowed; transform: none; }
+    .btn-search:disabled { background: #94a3b8; cursor:not-allowed; transform:none; }
 
-    /* ── Map ─────────────────────────────────────────────── */
+    /* ── Map ─────────────────────────────────────────────────────────── */
     #map { flex: 1; }
 
-    /* ── Status strip ────────────────────────────────────── */
+    /* ── Status bar ──────────────────────────────────────────────────── */
     .status-bar {
       height: 28px;
       flex-shrink: 0;
@@ -154,145 +138,390 @@
       align-items: center;
       font-size: .72rem;
       color: var(--muted);
-      letter-spacing: .01em;
     }
     .status-bar .dot {
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: #22c55e;
-      margin-right: 7px;
+      width:6px; height:6px; border-radius:50%;
+      background:#22c55e; margin-right:7px; flex-shrink:0;
+    }
+    .status-bar .dot.busy  { background:#f59e0b; }
+    .status-bar .dot.error { background:#ef4444; }
+
+    /* ── Side panel ──────────────────────────────────────────────────── */
+    .panel {
+      position: fixed;
+      top: 60px; right: 0; bottom: 28px;
+      width: var(--panel-w);
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      box-shadow: -4px 0 20px rgba(0,0,0,.08);
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform .3s cubic-bezier(.4,0,.2,1);
+      z-index: 1500;
+      overflow: hidden;
+    }
+    .panel.open { transform: translateX(0); }
+
+    /* panel header */
+    .panel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
-    .status-bar .dot.busy  { background: #f59e0b; }
-    .status-bar .dot.error { background: #ef4444; }
+    .panel-address {
+      font-size: .95rem;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .panel-subtitle {
+      font-size: .68rem;
+      color: var(--muted);
+      margin-top: 2px;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .btn-close {
+      width:26px; height:26px;
+      border:none; background:var(--bg); border-radius:50%;
+      font-size:1rem; cursor:pointer; color:var(--muted);
+      flex-shrink:0; margin-left:8px; margin-top:-2px;
+      transition: background .1s, color .1s;
+      display:flex; align-items:center; justify-content:center;
+    }
+    .btn-close:hover { background:var(--border); color:var(--text); }
+
+    /* scrollable body */
+    .panel-body { flex:1; overflow-y:auto; }
+
+    /* ── Score section ───────────────────────────────────────────────── */
+    .score-section {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .score-ring-wrap {
+      position: relative;
+      width: 88px; height: 88px;
+      flex-shrink: 0;
+    }
+    .score-svg { width:100%; height:100%; }
+    .score-inner {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+    }
+    .score-num { font-size:1.5rem; font-weight:800; color:var(--text); line-height:1; }
+    .score-den { font-size:.62rem; color:var(--muted); margin-top:1px; }
+
+    .score-right { flex:1; min-width:0; }
+    .outlook-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: .72rem;
+      font-weight: 700;
+      border: 1.5px solid;
+      margin-bottom: 10px;
+    }
+
+    /* signal bars */
+    .signals { display:flex; flex-direction:column; gap:5px; }
+    .sig-row  { display:flex; align-items:center; gap:6px; font-size:.68rem; }
+    .sig-label { width:50px; color:var(--muted); flex-shrink:0; }
+    .sig-track { flex:1; height:4px; background:var(--border); border-radius:2px; overflow:hidden; }
+    .sig-fill  { height:100%; border-radius:2px; transition:width .9s ease; }
+    .sig-val   { width:22px; text-align:right; color:var(--muted); flex-shrink:0; }
+
+    /* ── Generic panel section ───────────────────────────────────────── */
+    .panel-section {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sec-title {
+      font-size: .65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .info-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 5px 12px;
+      font-size: .82rem;
+    }
+    .info-label { color: var(--muted); }
+    .info-val   { color: var(--text); font-weight:500; word-break:break-word; }
+
+    /* ── Timeline ────────────────────────────────────────────────────── */
+    .tl-list { display:flex; flex-direction:column; }
+    .tl-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 5px 0;
+      position: relative;
+    }
+    .tl-item:not(:last-child)::before {
+      content:'';
+      position:absolute;
+      left:5px; top:18px;
+      width:1px;
+      height:calc(100% - 6px);
+      background:var(--border);
+    }
+    .tl-dot {
+      width:11px; height:11px; border-radius:50%;
+      background:var(--primary);
+      border:2px solid var(--surface);
+      box-shadow:0 0 0 1.5px var(--primary);
+      flex-shrink:0; margin-top:3px;
+    }
+    .tl-event { font-size:.7rem;  color:var(--muted); line-height:1.3; }
+    .tl-date  { font-size:.8rem;  color:var(--text);  font-weight:600; }
+
+    /* ── Nearby cards ────────────────────────────────────────────────── */
+    .nearby-row { display:flex; gap:10px; }
+    .nearby-card {
+      flex:1; background:var(--bg); border-radius:8px;
+      padding:8px 10px; text-align:center;
+    }
+    .nearby-n   { font-size:1.4rem; font-weight:800; color:var(--text); line-height:1; }
+    .nearby-lbl { font-size:.65rem; color:var(--muted); margin-top:2px; }
+
+    /* ── Data note ───────────────────────────────────────────────────── */
+    .data-note {
+      margin: 8px 16px;
+      padding: 8px 10px;
+      background: #fef3c7;
+      border-radius: 6px;
+      font-size: .73rem;
+      color: #92400e;
+      display: flex;
+      gap: 6px;
+      align-items: flex-start;
+      line-height: 1.4;
+    }
+
+    /* ── Panel footer ────────────────────────────────────────────────── */
+    .panel-foot {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .btn-archive {
+      display: block;
+      width: 100%;
+      padding: 9px 0;
+      text-align: center;
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      font-size: .82rem;
+      font-weight: 600;
+      color: var(--text);
+      text-decoration: none;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    .btn-archive:hover {
+      background:#eff6ff; border-color:var(--primary); color:var(--primary);
+    }
   </style>
 </head>
 <body>
 
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
 <header>
   <div class="logo">
     Ma <span class="accent">TAMA</span>
     <span class="tagline">empowering renters</span>
   </div>
-
   <div class="search-bar">
     <div class="field">
       <input id="street-input" type="text" placeholder="Street name…" autocomplete="off" />
       <div id="street-dropdown" class="dropdown"></div>
     </div>
-
     <div class="field">
       <input id="building-input" type="text" placeholder="Building #" autocomplete="off" />
       <div id="building-dropdown" class="dropdown"></div>
     </div>
-
     <button id="search-btn" class="btn-search">Search</button>
   </div>
 </header>
 
+<!-- ── Map ────────────────────────────────────────────────────────────────── -->
 <div id="map"></div>
 
+<!-- ── Status bar ─────────────────────────────────────────────────────────── -->
 <div class="status-bar">
   <div class="dot" id="status-dot"></div>
   <span id="status-text">Ready</span>
 </div>
 
+<!-- ── Side panel ─────────────────────────────────────────────────────────── -->
+<aside id="panel" class="panel">
+
+  <div class="panel-head">
+    <div>
+      <div class="panel-address" id="panel-address">—</div>
+      <div class="panel-subtitle">TAMA38 Analysis</div>
+    </div>
+    <button class="btn-close" id="panel-close" aria-label="Close">&#x2715;</button>
+  </div>
+
+  <div class="panel-body">
+
+    <!-- Score + signals -->
+    <div class="score-section">
+      <div class="score-ring-wrap">
+        <svg class="score-svg" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="38" fill="none" stroke="#e2e8f0" stroke-width="9"/>
+          <circle id="score-arc" cx="50" cy="50" r="38" fill="none"
+                  stroke="#94a3b8" stroke-width="9" stroke-linecap="round"
+                  stroke-dasharray="238.76" stroke-dashoffset="238.76"
+                  transform="rotate(-90 50 50)"/>
+        </svg>
+        <div class="score-inner">
+          <div class="score-num" id="score-num">--</div>
+          <div class="score-den">/ 100</div>
+        </div>
+      </div>
+      <div class="score-right">
+        <div class="outlook-badge" id="outlook-badge">—</div>
+        <div class="signals" id="signals"></div>
+      </div>
+    </div>
+
+    <!-- Permit status -->
+    <div class="panel-section">
+      <div class="sec-title">Permit</div>
+      <div class="info-grid">
+        <span class="info-label">Status</span><span class="info-val" id="p-status">—</span>
+        <span class="info-label">Track</span> <span class="info-val" id="p-track">—</span>
+      </div>
+    </div>
+
+    <!-- Timeline -->
+    <div class="panel-section" id="tl-section" style="display:none">
+      <div class="sec-title">Timeline</div>
+      <div class="tl-list" id="tl-list"></div>
+    </div>
+
+    <!-- Building -->
+    <div class="panel-section">
+      <div class="sec-title">Building</div>
+      <div class="info-grid">
+        <span class="info-label">Year built</span><span class="info-val" id="b-year">—</span>
+        <span class="info-label">Floors</span>    <span class="info-val" id="b-floors">—</span>
+        <span class="info-label">Type</span>      <span class="info-val" id="b-type">—</span>
+      </div>
+    </div>
+
+    <!-- Nearby TAMA38 -->
+    <div class="panel-section">
+      <div class="sec-title">Nearby TAMA38 Projects</div>
+      <div class="nearby-row">
+        <div class="nearby-card">
+          <div class="nearby-n" id="nb-200">—</div>
+          <div class="nearby-lbl">within 200 m</div>
+        </div>
+        <div class="nearby-card">
+          <div class="nearby-n" id="nb-500">—</div>
+          <div class="nearby-lbl">within 500 m</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Data note (shown only when permits table is absent) -->
+    <div class="data-note" id="data-note" style="display:none">
+      <span>⚠</span>
+      <span id="data-note-text"></span>
+    </div>
+
+  </div><!-- /panel-body -->
+
+  <div class="panel-foot">
+    <a id="archive-link" class="btn-archive" href="#" target="_blank"
+       rel="noopener noreferrer" style="display:none">
+      Engineering Archive →
+    </a>
+  </div>
+
+</aside><!-- /panel -->
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  // ── Map setup (OSM / EPSG:3857 display; geometry served as WGS84 from backend) ──
+  // ── Map ───────────────────────────────────────────────────────────────────
   const map = L.map("map", { zoomControl: true }).setView([32.0853, 34.7818], 13);
-
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
   }).addTo(map);
 
-  let activeLayer = null;
+  let activeLayer  = null;
+  let nearbyLayer  = null;
 
-  // ── Status helpers ────────────────────────────────────────────────────────
-  const dot  = document.getElementById("status-dot");
-  const text = document.getElementById("status-text");
-
+  // ── Status bar ────────────────────────────────────────────────────────────
   function setStatus(msg, state = "ok") {
-    text.textContent = msg;
-    dot.className = "dot" + (state === "ok" ? "" : ` ${state}`);
+    el("status-text").textContent = msg;
+    el("status-dot").className = "dot" + (state === "ok" ? "" : ` ${state}`);
   }
 
-  // ── Generic autocomplete factory ──────────────────────────────────────────
+  // ── Autocomplete ──────────────────────────────────────────────────────────
   function makeAutocomplete(inputEl, dropdownEl, fetcher, onPick) {
-    let timer;
-    let activeIdx = -1;
-
-    function getItems() {
-      return Array.from(dropdownEl.querySelectorAll(".dropdown-item"));
-    }
+    let timer, activeIdx = -1;
+    const items = () => Array.from(dropdownEl.querySelectorAll(".dropdown-item"));
 
     function close() {
       dropdownEl.classList.remove("open");
       dropdownEl.innerHTML = "";
       activeIdx = -1;
     }
-
-    function open(items) {
-      if (!items.length) { close(); return; }
-      dropdownEl.innerHTML = items
+    function open(vals) {
+      if (!vals.length) { close(); return; }
+      dropdownEl.innerHTML = vals
         .map(v => `<div class="dropdown-item" data-value="${esc(v)}">${esc(v)}</div>`)
         .join("");
       dropdownEl.querySelectorAll(".dropdown-item").forEach(el => {
-        el.addEventListener("mousedown", e => {
-          e.preventDefault();
-          pick(el.dataset.value);
-        });
+        el.addEventListener("mousedown", e => { e.preventDefault(); pick(el.dataset.value); });
       });
       dropdownEl.classList.add("open");
       activeIdx = -1;
     }
-
-    function pick(value) {
-      inputEl.value = value;
-      close();
-      onPick(value);
-    }
+    function pick(v) { inputEl.value = v; close(); onPick(v); }
 
     inputEl.addEventListener("input", () => {
       clearTimeout(timer);
       const q = inputEl.value.trim();
       if (q.length < 1) { close(); return; }
-      timer = setTimeout(() => {
-        fetcher(q).then(open).catch(() => close());
-      }, 250);
+      timer = setTimeout(() => fetcher(q).then(open).catch(() => close()), 250);
     });
-
     inputEl.addEventListener("keydown", e => {
-      const items = getItems();
+      const list = items();
       if (e.key === "Escape") { close(); return; }
-      if (!items.length) return;
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        activeIdx = Math.min(activeIdx + 1, items.length - 1);
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        activeIdx = Math.max(activeIdx - 1, 0);
-      } else if (e.key === "Enter" && activeIdx >= 0) {
-        e.preventDefault();
-        pick(items[activeIdx].dataset.value);
-        return;
-      }
-      items.forEach((el, i) => el.classList.toggle("active", i === activeIdx));
+      if (!list.length) return;
+      if (e.key === "ArrowDown") { e.preventDefault(); activeIdx = Math.min(activeIdx+1, list.length-1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); activeIdx = Math.max(activeIdx-1, 0); }
+      else if (e.key === "Enter" && activeIdx >= 0) { e.preventDefault(); pick(list[activeIdx].dataset.value); return; }
+      list.forEach((el, i) => el.classList.toggle("active", i === activeIdx));
     });
-
     inputEl.addEventListener("blur", () => setTimeout(close, 150));
-    return { close };
   }
 
-  // ── Wire up autocompletes ─────────────────────────────────────────────────
   makeAutocomplete(
     document.getElementById("street-input"),
     document.getElementById("street-dropdown"),
     q => fetch(`/api/autocomplete/streets?q=${enc(q)}`).then(r => r.json()),
-    () => { document.getElementById("building-input").focus(); }
+    () => document.getElementById("building-input").focus()
   );
-
   makeAutocomplete(
     document.getElementById("building-input"),
     document.getElementById("building-dropdown"),
@@ -302,15 +531,9 @@
     },
     () => {}
   );
-
-  // Close dropdowns when clicking outside
   document.addEventListener("click", e => {
-    if (!e.target.closest(".field")) {
-      document.querySelectorAll(".dropdown").forEach(d => {
-        d.classList.remove("open");
-        d.innerHTML = "";
-      });
-    }
+    if (!e.target.closest(".field"))
+      document.querySelectorAll(".dropdown").forEach(d => { d.classList.remove("open"); d.innerHTML=""; });
   });
 
   // ── Search ────────────────────────────────────────────────────────────────
@@ -323,12 +546,10 @@
   async function doSearch() {
     const street   = document.getElementById("street-input").value.trim();
     const building = document.getElementById("building-input").value.trim();
-
     if (!street || !building) {
       setStatus("Please enter both a street name and building number.", "error");
       return;
     }
-
     setStatus("Searching…", "busy");
     searchBtn.disabled = true;
 
@@ -337,34 +558,27 @@
       const data = await res.json();
 
       if (!res.ok) {
-        setStatus(`Address not found — ${street} ${building}`, "error");
+        setStatus(`Not found — ${street} ${building}`, "error");
         return;
       }
 
+      // Render building footprint
       if (activeLayer) { map.removeLayer(activeLayer); }
-
       activeLayer = L.geoJSON(data.geometry, {
-        // Polygon / MultiPolygon style
-        style: {
-          color:       "#2563eb",
-          weight:      4,
-          opacity:     1,
-          fillColor:   "#2563eb",
-          fillOpacity: 0.18,
-        },
-        // Point style
-        pointToLayer: (_feat, latlng) =>
-          L.circleMarker(latlng, {
-            radius:      13,
-            color:       "#2563eb",
-            weight:      4,
-            opacity:     1,
-            fillColor:   "#2563eb",
-            fillOpacity: 0.22,
-          }),
+        style: { color:"#2563eb", weight:4, opacity:1, fillColor:"#2563eb", fillOpacity:.18 },
+        pointToLayer: (_f, latlng) => L.circleMarker(latlng, {
+          radius:13, color:"#2563eb", weight:4, fillColor:"#2563eb", fillOpacity:.22
+        }),
       }).addTo(map);
+      map.fitBounds(activeLayer.getBounds(), { maxZoom:18, padding:[60,60] });
 
-      map.fitBounds(activeLayer.getBounds(), { maxZoom: 18, padding: [60, 60] });
+      // Populate analysis panel
+      populatePanel(data);
+      openPanel();
+
+      // Load nearby TAMA38 markers (non-blocking)
+      loadNearbyPermits(street, building);
+
       setStatus(`${data.street}  ${data.building}`, "ok");
 
     } catch (err) {
@@ -375,14 +589,158 @@
     }
   }
 
-  // ── Tiny helpers ──────────────────────────────────────────────────────────
+  // ── Panel ─────────────────────────────────────────────────────────────────
+  document.getElementById("panel-close").addEventListener("click", closePanel);
+  function openPanel()  { document.getElementById("panel").classList.add("open"); }
+  function closePanel() { document.getElementById("panel").classList.remove("open"); }
+
+  const SIG_DEFS = [
+    { key:"permit",    label:"Permit"  },
+    { key:"age",       label:"Age"     },
+    { key:"floors",    label:"Floors"  },
+    { key:"proximity", label:"Nearby"  },
+    { key:"site",      label:"Site"    },
+  ];
+
+  function populatePanel(data) {
+    const t  = data.tama          || {};
+    const bi = data.building_info || {};
+    const color = t.color || "#94a3b8";
+    const circ  = 238.76;
+
+    // Address
+    el("panel-address").textContent = `${data.street} ${data.building}`;
+
+    // Animate score ring
+    const arc = document.getElementById("score-arc");
+    arc.style.transition = "";
+    arc.style.strokeDashoffset = circ;   // reset before animating
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      arc.style.transition = "stroke-dashoffset 1s ease, stroke .3s";
+      arc.style.stroke = color;
+      arc.style.strokeDashoffset = circ * (1 - (t.score || 0) / 100);
+    }));
+    el("score-num").textContent = t.score !== undefined ? t.score : "--";
+
+    // Outlook badge
+    const badge = el("outlook-badge");
+    badge.textContent = t.outlook || "—";
+    badge.style.background   = color + "18";
+    badge.style.color        = color;
+    badge.style.borderColor  = color + "55";
+
+    // Signal bars
+    el("signals").innerHTML = SIG_DEFS.map(({key, label}) => {
+      const v = t.signals ? (t.signals[key] ?? 0) : 0;
+      return `<div class="sig-row">
+        <span class="sig-label">${label}</span>
+        <div class="sig-track">
+          <div class="sig-fill" style="width:0%;background:${color}"
+               data-target="${v}"></div>
+        </div>
+        <span class="sig-val">${v}</span>
+      </div>`;
+    }).join("");
+    // Animate bars after DOM inserts
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el("signals").querySelectorAll(".sig-fill").forEach(bar => {
+        bar.style.width = bar.dataset.target + "%";
+      });
+    }));
+
+    // Permit status
+    el("p-status").textContent = t.status || "—";
+    el("p-track").textContent  = t.track  || "—";
+
+    // Timeline
+    const tl = Object.entries(t.timeline || {});
+    if (tl.length) {
+      el("tl-section").style.display = "";
+      el("tl-list").innerHTML = tl.map(([event, iso]) => {
+        const d = new Date(iso);
+        const fmt = d.toLocaleDateString("en-GB", {month:"short", year:"numeric"});
+        return `<div class="tl-item">
+          <div class="tl-dot"></div>
+          <div>
+            <div class="tl-event">${esc(event)}</div>
+            <div class="tl-date">${fmt}</div>
+          </div>
+        </div>`;
+      }).join("");
+    } else {
+      el("tl-section").style.display = "none";
+    }
+
+    // Building info
+    el("b-year").textContent   = bi.year   || "—";
+    el("b-floors").textContent = bi.floors != null ? `${bi.floors} floors` : "—";
+    el("b-type").textContent   = bi.type   || "—";
+
+    // Nearby counts
+    el("nb-200").textContent = t.nearby_200m != null ? t.nearby_200m : "—";
+    el("nb-500").textContent = t.nearby_500m != null ? t.nearby_500m : "—";
+
+    // Data note
+    const noteEl = el("data-note");
+    if (t.data_note) {
+      noteEl.style.display = "flex";
+      el("data-note-text").textContent = t.data_note;
+    } else {
+      noteEl.style.display = "none";
+    }
+
+    // Archive link
+    const archiveEl = el("archive-link");
+    if (data.archive_url) {
+      archiveEl.href = data.archive_url;
+      archiveEl.style.display = "";
+    } else {
+      archiveEl.style.display = "none";
+    }
+  }
+
+  // ── Nearby permits on map ─────────────────────────────────────────────────
+  async function loadNearbyPermits(street, building) {
+    if (nearbyLayer) { map.removeLayer(nearbyLayer); nearbyLayer = null; }
+    try {
+      const res = await fetch(
+        `/api/nearby_permits?street=${enc(street)}&building=${enc(building)}`
+      );
+      if (!res.ok) return;
+      const fc = await res.json();
+      if (!fc.features || !fc.features.length) return;
+
+      nearbyLayer = L.geoJSON(fc, {
+        style: {
+          color:"#f59e0b", weight:2, opacity:.9,
+          fillColor:"#f59e0b", fillOpacity:.1,
+        },
+        pointToLayer: (_f, latlng) =>
+          L.circleMarker(latlng, { radius:7, color:"#f59e0b", weight:2, fillOpacity:.2 }),
+        onEachFeature: (feat, layer) => {
+          const p   = feat.properties;
+          const dt  = p.open_request
+                    ? new Date(p.open_request).toLocaleDateString("en-GB",{month:"short",year:"numeric"})
+                    : null;
+          layer.bindPopup(
+            `<b>${p.track}</b>` +
+            (p.building_stage || p.request_stage ? `<br>${p.building_stage || p.request_stage}` : "") +
+            (dt ? `<br>Opened: ${dt}` : "")
+          );
+        },
+      }).addTo(map);
+    } catch (e) {
+      console.warn("Could not load nearby permits:", e);
+    }
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function el(id) { return document.getElementById(id); }
   function enc(s) { return encodeURIComponent(s); }
   function esc(s) {
     return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 </script>
 </body>

@@ -3,8 +3,10 @@ Fetch TLV geodata layers from the Tel Aviv ArcGIS REST service
 and load them into a PostGIS database, replacing each table every run.
 
 Layers:
-  addresses  – MapServer/527  (address points, EPSG:2039)
-  buildings  – MapServer/513  (building footprint polygons, EPSG:2039)
+  addresses       – MapServer/527  (address points, EPSG:2039)
+  buildings       – MapServer/513  (building footprint polygons, EPSG:2039)
+  building_sites  – MapServer/499  (active building cases / construction status)
+  permits         – MapServer/772  (permit requests incl. TAMA38 flags)
 """
 import logging
 import requests
@@ -37,6 +39,16 @@ LAYERS = [
         "url": f"{BASE_URL}/513",
         "table": "buildings",
         "indexes": ["id_binyan", "ms_komot", "year"],
+    },
+    {
+        "url": f"{BASE_URL}/499",
+        "table": "building_sites",
+        "indexes": ["ms_tik_binyan"],
+    },
+    {
+        "url": f"{BASE_URL}/772",
+        "table": "permits",
+        "indexes": ["ms_tik_binyan", "sw_tama_38"],
     },
 ]
 
