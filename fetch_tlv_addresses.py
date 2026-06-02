@@ -1,13 +1,17 @@
 """
-Fetch TLV addresses layer (MapServer/527) from Tel Aviv ArcGIS REST
-and load into a PostGIS database, replacing the table each run.
+Fetch TLV geodata layers from the Tel Aviv ArcGIS REST service
+and load them into a PostGIS database, replacing each table every run.
+
+Layers:
+  addresses  – MapServer/527  (address points, EPSG:2039)
+  buildings  – MapServer/513  (building footprint polygons, EPSG:2039)
 """
 import logging
 import requests
 import geopandas as gpd
 from sqlalchemy import create_engine, text
 
-# --- Configuration ---
+# --- Shared configuration ---
 POSTGIS = {
     "host": "localhost",
     "port": 5432,
@@ -16,10 +20,25 @@ POSTGIS = {
     "password": "mypassword",
     "schema": "TLV",
 }
-LAYER_URL = "https://gisn.tel-aviv.gov.il/arcgis/rest/services/IView2/MapServer/527"
-TABLE_NAME = "addresses"
 BATCH_SIZE = 2000
-TARGET_SRID = 2039  # Israel 1993 / Israeli TM Grid (native CRS of this layer)
+TARGET_SRID = 2039  # Israel 1993 / Israeli TM Grid (native CRS of both layers)
+
+BASE_URL = "https://gisn.tel-aviv.gov.il/arcgis/rest/services/IView2/MapServer"
+
+# --- Layer registry ---
+# Each entry: url, table name in PostGIS, extra B-tree indexes beyond the GIST
+LAYERS = [
+    {
+        "url": f"{BASE_URL}/527",
+        "table": "addresses",
+        "indexes": ["id_ktovet", "k_rechov"],
+    },
+    {
+        "url": f"{BASE_URL}/513",
+        "table": "buildings",
+        "indexes": ["id_binyan", "ms_komot", "year"],
+    },
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,8 +51,8 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def fetch_all_features() -> gpd.GeoDataFrame:
-    query_url = f"{LAYER_URL}/query"
+def fetch_all_features(layer_url: str) -> gpd.GeoDataFrame:
+    query_url = f"{layer_url}/query"
     all_features = []
     offset = 0
 
@@ -53,18 +72,18 @@ def fetch_all_features() -> gpd.GeoDataFrame:
         if not batch:
             break
         all_features.extend(batch)
-        log.info("Fetched %d features so far (offset %d)", len(all_features), offset)
+        log.info("  %s: %d features so far (offset %d)", layer_url, len(all_features), offset)
         if len(batch) < BATCH_SIZE:
             break
         offset += BATCH_SIZE
 
     if not all_features:
-        raise RuntimeError("No features returned from the REST service.")
+        raise RuntimeError(f"No features returned from {layer_url}")
 
     return gpd.GeoDataFrame.from_features(all_features, crs=f"EPSG:{TARGET_SRID}")
 
 
-def save_to_postgis(gdf: gpd.GeoDataFrame) -> None:
+def save_to_postgis(gdf: gpd.GeoDataFrame, table_name: str, attribute_indexes: list[str]) -> None:
     schema = POSTGIS["schema"]
     engine = create_engine(
         f"postgresql+psycopg2://{POSTGIS['user']}:{POSTGIS['password']}"
@@ -75,38 +94,34 @@ def save_to_postgis(gdf: gpd.GeoDataFrame) -> None:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
         conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
 
-    gdf.to_postgis(TABLE_NAME, engine, schema=schema, if_exists="replace", index=False)
+    gdf.to_postgis(table_name, engine, schema=schema, if_exists="replace", index=False)
 
     geom_col = gdf.geometry.name
     with engine.begin() as conn:
-        # Spatial index (GIST) for geometry queries
         conn.execute(text(
-            f'CREATE INDEX {TABLE_NAME}_geom_idx '
-            f'ON "{schema}"."{TABLE_NAME}" USING GIST ("{geom_col}")'
+            f'CREATE INDEX {table_name}_geom_idx '
+            f'ON "{schema}"."{table_name}" USING GIST ("{geom_col}")'
         ))
-        # B-tree index on the primary address identifier
-        conn.execute(text(
-            f'CREATE INDEX {TABLE_NAME}_id_ktovet_idx '
-            f'ON "{schema}"."{TABLE_NAME}" (id_ktovet)'
-        ))
-        # B-tree index on street code for common filter/join queries
-        conn.execute(text(
-            f'CREATE INDEX {TABLE_NAME}_k_rechov_idx '
-            f'ON "{schema}"."{TABLE_NAME}" (k_rechov)'
-        ))
+        for col in attribute_indexes:
+            conn.execute(text(
+                f'CREATE INDEX {table_name}_{col}_idx '
+                f'ON "{schema}"."{table_name}" ({col})'
+            ))
 
     log.info(
-        "Saved %d records to %s.%s with spatial and attribute indexes.",
-        len(gdf), schema, TABLE_NAME,
+        "  Saved %d records to %s.%s with GIST + %d attribute indexes.",
+        len(gdf), schema, table_name, len(attribute_indexes),
     )
 
 
 def main():
-    log.info("=== Starting TLV addresses fetch ===")
-    gdf = fetch_all_features()
-    log.info("Total features fetched: %d", len(gdf))
-    save_to_postgis(gdf)
-    log.info("=== Finished ===")
+    for layer in LAYERS:
+        log.info("=== Fetching layer: %s → %s ===", layer["url"], layer["table"])
+        gdf = fetch_all_features(layer["url"])
+        log.info("  Total features: %d", len(gdf))
+        save_to_postgis(gdf, layer["table"], layer["indexes"])
+
+    log.info("=== All layers finished ===")
 
 
 if __name__ == "__main__":
