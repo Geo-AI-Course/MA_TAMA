@@ -75,18 +75,40 @@ def search():
     if not street or not building:
         return jsonify({"error": "street and building are required"}), 400
 
-    with engine.connect() as conn:
-        row = conn.execute(
-            text(
-                "SELECT t_rechov, ms_bayit::text, "
-                # Transform from EPSG:2039 (source CRS) to WGS84 for Leaflet
-                "ST_AsGeoJSON(ST_Transform(geometry, 4326)) "
-                'FROM "TLV".addresses '
-                "WHERE t_rechov ILIKE :street AND ms_bayit::text = :building "
-                "LIMIT 1"
-            ),
-            {"street": street, "building": building},
-        ).fetchone()
+    params = {"street": street, "building": building}
+
+    # Primary: building polygon that contains (or is within 1 m of) the address point
+    row = None
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT a.t_rechov, a.ms_bayit::text, "
+                    "ST_AsGeoJSON(ST_Transform(b.geometry, 4326)) "
+                    'FROM "TLV".addresses a '
+                    'JOIN "TLV".buildings b ON ST_DWithin(a.geometry, b.geometry, 1) '
+                    "WHERE a.t_rechov ILIKE :street AND a.ms_bayit::text = :building "
+                    "ORDER BY ST_Distance(a.geometry, b.geometry) "
+                    "LIMIT 1"
+                ),
+                params,
+            ).fetchone()
+    except Exception as exc:
+        log.warning("Building polygon lookup failed (%s) — falling back to address point", exc)
+
+    # Fallback: address point geometry
+    if not row:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT t_rechov, ms_bayit::text, "
+                    "ST_AsGeoJSON(ST_Transform(geometry, 4326)) "
+                    'FROM "TLV".addresses '
+                    "WHERE t_rechov ILIKE :street AND ms_bayit::text = :building "
+                    "LIMIT 1"
+                ),
+                params,
+            ).fetchone()
 
     if not row:
         return jsonify({"error": "Address not found"}), 404
