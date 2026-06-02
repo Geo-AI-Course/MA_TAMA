@@ -43,6 +43,17 @@ def _row_to_dict(row) -> dict:
     return result
 
 
+def _ts_to_iso(val) -> str | None:
+    """Convert a Unix-ms timestamp (int or float) to an ISO date string."""
+    if val is None:
+        return None
+    try:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(float(val) / 1000, tz=timezone.utc).date().isoformat()
+    except (ValueError, OSError, OverflowError, TypeError):
+        return None
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -99,7 +110,7 @@ def search():
                     a.t_rechov, a.ms_bayit::text, a.k_rechov,
                     ST_AsGeoJSON(ST_Transform(b.geometry, 4326))  AS geom_json,
                     ST_AsText(a.geometry)                         AS addr_wkt,
-                    b.year, b.ms_komot, b.t_sug_mivne
+                    b.year::int, b.ms_komot::int, b.t_sug_mivne
                 FROM "TLV".addresses  a
                 JOIN "TLV".buildings  b ON ST_DWithin(a.geometry, b.geometry, 1)
                 WHERE a.t_rechov ILIKE :street AND a.ms_bayit::text = :building
@@ -138,9 +149,8 @@ def search():
         with engine.connect() as conn:
             permit_rows = conn.execute(text("""
                 SELECT sw_tama_38, sw_tama_38_chadash, sw_tama_38_tosefet,
-                       request_stage, building_stage, permission_date,
-                       open_request, tr_hathalat_bniya, expiry_date,
-                       progress, yechidot_diyur, finished
+                       building_stage, permission_date,
+                       open_request, tr_hathalat_bniya, finished
                 FROM "TLV".permits
                 WHERE ST_DWithin(geometry,
                                  ST_SetSRID(ST_GeomFromText(:wkt), 2039), 5)
@@ -156,11 +166,8 @@ def search():
                         geometry, ST_SetSRID(ST_GeomFromText(:wkt), 2039), 500
                     )) AS n500
                 FROM "TLV".permits
-                WHERE (
-                    (sw_tama_38      IS NOT NULL AND sw_tama_38      != '') OR
-                    (sw_tama_38_chadash IS NOT NULL AND sw_tama_38_chadash != '') OR
-                    (sw_tama_38_tosefet IS NOT NULL AND sw_tama_38_tosefet != '')
-                )
+                WHERE (sw_tama_38 = 'כן' OR sw_tama_38_chadash = 'כן'
+                       OR sw_tama_38_tosefet = 'כן')
                 AND NOT ST_DWithin(geometry,
                                    ST_SetSRID(ST_GeomFromText(:wkt), 2039), 5)
             """), {"wkt": addr_wkt}).fetchone()
@@ -236,19 +243,14 @@ def nearby_permits():
                     ST_AsGeoJSON(ST_Transform(geometry, 4326)),
                     request_stage, building_stage,
                     CASE
-                        WHEN sw_tama_38_chadash IS NOT NULL
-                             AND sw_tama_38_chadash != '' THEN 'Track 2'
-                        WHEN sw_tama_38_tosefet  IS NOT NULL
-                             AND sw_tama_38_tosefet  != '' THEN 'Track 1'
+                        WHEN sw_tama_38_chadash = 'כן' THEN 'Track 2'
+                        WHEN sw_tama_38_tosefet  = 'כן' THEN 'Track 1'
                         ELSE 'TAMA38'
                     END AS track,
                     permission_date, open_request
                 FROM "TLV".permits
-                WHERE (
-                    (sw_tama_38      IS NOT NULL AND sw_tama_38      != '') OR
-                    (sw_tama_38_chadash IS NOT NULL AND sw_tama_38_chadash != '') OR
-                    (sw_tama_38_tosefet IS NOT NULL AND sw_tama_38_tosefet != '')
-                )
+                WHERE (sw_tama_38 = 'כן' OR sw_tama_38_chadash = 'כן'
+                       OR sw_tama_38_tosefet = 'כן')
                 AND ST_DWithin(geometry,
                                ST_SetSRID(ST_GeomFromText(:wkt), 2039), 500)
                 AND NOT ST_DWithin(geometry,
@@ -268,8 +270,8 @@ def nearby_permits():
                 "request_stage":   r[1],
                 "building_stage":  r[2],
                 "track":           r[3],
-                "permission_date": r[4].isoformat() if r[4] else None,
-                "open_request":    r[5].isoformat() if r[5] else None,
+                "permission_date": _ts_to_iso(r[4]),
+                "open_request":    _ts_to_iso(r[5]),
             },
         }
         for r in rows
