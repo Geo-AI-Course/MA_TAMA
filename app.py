@@ -41,8 +41,8 @@ def autocomplete_streets():
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                'SELECT DISTINCT t_rehov FROM "TLV".addresses '
-                "WHERE t_rehov ILIKE :q ORDER BY t_rehov LIMIT 10"
+                'SELECT DISTINCT t_rechov FROM "TLV".addresses '
+                "WHERE t_rechov ILIKE :q ORDER BY t_rechov LIMIT 10"
             ),
             {"q": f"%{q}%"},
         )
@@ -59,9 +59,9 @@ def autocomplete_buildings():
         rows = conn.execute(
             text(
                 'SELECT DISTINCT ms_bayit::text FROM "TLV".addresses '
-                "WHERE t_rehov ILIKE :street "
+                "WHERE t_rechov ILIKE :street "
                 "AND (:q = '' OR ms_bayit::text LIKE :q_like) "
-                "ORDER BY length(ms_bayit::text), ms_bayit::text LIMIT 20"
+                "ORDER BY ms_bayit LIMIT 20"
             ),
             {"street": street, "q": q, "q_like": f"{q}%"},
         )
@@ -78,11 +78,11 @@ def search():
     with engine.connect() as conn:
         row = conn.execute(
             text(
-                "SELECT t_rehov, ms_bayit::text, "
+                "SELECT t_rechov, ms_bayit::text, "
                 # Transform from EPSG:2039 (source CRS) to WGS84 for Leaflet
                 "ST_AsGeoJSON(ST_Transform(geometry, 4326)) "
                 'FROM "TLV".addresses '
-                "WHERE t_rehov ILIKE :street AND ms_bayit::text = :building "
+                "WHERE t_rechov ILIKE :street AND ms_bayit::text = :building "
                 "LIMIT 1"
             ),
             {"street": street, "building": building},
