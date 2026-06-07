@@ -47,6 +47,9 @@ _LABEL_MAP = {
     0: "Application open",
 }
 
+# building_stage values that mean TAMA38 construction is fully done
+_COMPLETED_STAGES = {'קיים אכלוס', 'קיימת לפחות תעודת גמר אחת'}
+
 
 # ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -92,10 +95,10 @@ def _rank_permit(p: dict) -> int:
 
 
 def _score_permit(permits: list) -> tuple:
-    """Returns (score, status_label, track_label, timeline_dict)."""
+    """Returns (score, status_label, track_label, timeline_dict, is_completed)."""
     tama = [p for p in permits if _is_tama38(p)]
     if not tama:
-        return 0, "No TAMA38 permit found", "Unknown", {}
+        return 0, "No TAMA38 permit found", "Unknown", {}, False
 
     best = max(tama, key=_rank_permit)
     rank = _rank_permit(best)
@@ -108,23 +111,26 @@ def _score_permit(permits: list) -> tuple:
     else:
         track = "TAMA38 (track unspecified)"
 
-    # Timeline from Unix-ms timestamps
+    # Timeline — keyed by the milestone labels used by the frontend
     timeline = {}
     for key, label in (
-        ('open_request',      "Request opened"),
-        ('permission_date',   "Permit granted"),
-        ('tr_hathalat_bniya', "Construction started"),
+        ('open_request',      'form1'),
+        ('permission_date',   'permit'),
+        ('tr_hathalat_bniya', 'build'),
     ):
         d = _parse_ts(best.get(key))
         if d:
             timeline[label] = d.isoformat()
 
-    # finished is a DD/MM/YYYY text field
+    # finished is a DD/MM/YYYY text field → "טופס 4" milestone
     fin = _parse_ddmmyyyy(best.get('finished'))
     if fin:
-        timeline["Completed"] = fin.isoformat()
+        timeline['form4'] = fin.isoformat()
 
-    return _SCORE_MAP[rank], _LABEL_MAP[rank], track, timeline
+    bs = best.get('building_stage') or ''
+    is_completed = bs in _COMPLETED_STAGES or bool(fin)
+
+    return _SCORE_MAP[rank], _LABEL_MAP[rank], track, timeline, is_completed
 
 
 # ── Signal scorers ────────────────────────────────────────────────────────────
@@ -168,7 +174,7 @@ def compute_tama_score(
     nearby_200m: int,
     has_open_site_case: bool,
 ) -> dict:
-    s_permit, status, track, timeline = _score_permit(permits)
+    s_permit, status, track, timeline, is_completed = _score_permit(permits)
     s_age       = _score_age(year)
     s_floors    = _score_floors(ms_komot)
     s_proximity = _score_proximity(nearby_200m)
@@ -184,14 +190,20 @@ def compute_tama_score(
 
     _, outlook, color = next(r for r in _OUTLOOK if composite >= r[0])
 
+    # Override for completed projects — they deserve their own clear label
+    if is_completed:
+        outlook = "TAMA38 Completed"
+        color   = "#16a34a"
+
     return {
-        "score":       composite,
-        "outlook":     outlook,
-        "color":       color,
-        "status":      status,
-        "track":       track,
-        "timeline":    timeline,
-        "nearby_200m": nearby_200m,
+        "score":        composite,
+        "outlook":      outlook,
+        "color":        color,
+        "is_completed": is_completed,
+        "status":       status,
+        "track":        track,
+        "timeline":     timeline,
+        "nearby_200m":  nearby_200m,
         "signals": {
             "permit":    s_permit,
             "age":       s_age,
