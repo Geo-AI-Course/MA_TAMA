@@ -652,16 +652,23 @@
     'https://gisn.tel-aviv.gov.il/ArcGIS/rest/services/IView2/MapServer/export';
 
   // ① Tile layer that calls the ESRI Export API for each 256×256 tile.
-  //    The server reads its own drawingInfo and renders each polygon with the
-  //    correct fill colour AND pattern (e.g. diagonal hatching for roads).
+  //    bbox must be in Web Mercator (3857) — Leaflet tiles are Mercator-projected,
+  //    so passing WGS84 bounds causes visible distortion at Tel Aviv's latitude.
+  function _lngToMerc(lng) { return lng * 20037508.34 / 180; }
+  function _latToMerc(lat) {
+    return Math.log(Math.tan((90 + lat) * Math.PI / 360)) / (Math.PI / 180) * 20037508.34 / 180;
+  }
+
   const ZoningTileLayer = L.GridLayer.extend({
     createTile(coords, done) {
       const img = document.createElement('img');
       const sz  = this.getTileSize();
       const b   = this._tileCoordsToBounds(coords);
+      const xmin = _lngToMerc(b.getWest()),  ymin = _latToMerc(b.getSouth());
+      const xmax = _lngToMerc(b.getEast()),  ymax = _latToMerc(b.getNorth());
       img.src = _ZONING_EXPORT
-        + `?bbox=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`
-        + `&bboxSR=4326&imageSR=4326`
+        + `?bbox=${xmin},${ymin},${xmax},${ymax}`
+        + `&bboxSR=3857&imageSR=3857`
         + `&size=${sz.x},${sz.y}`
         + `&layers=show:837&format=png32&transparent=true&f=image`;
       img.onload  = () => done(null, img);
