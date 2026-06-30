@@ -306,7 +306,7 @@ def check_neighborhoods():
 
 # ── Step 7 — Engineering Archive scrape ──────────────────────────────────────
 
-def check_archive_scrape(skip: bool):
+def check_archive_scrape(skip: bool, archive_refresh_days: int = 30):
     section("Engineering Archive scrape")
 
     if skip:
@@ -314,52 +314,111 @@ def check_archive_scrape(skip: bool):
         return
 
     from sqlalchemy import text
+    from datetime import datetime, timezone
 
     with _engine().connect() as conn:
-        # Total TAMA38 buildings (unique k_rechov/ms_bayit pairs near permits)
+        # ── Coverage ──────────────────────────────────────────────────────────
         try:
             total = conn.execute(text("""
                 SELECT COUNT(DISTINCT (a.k_rechov, a.ms_bayit))
                 FROM "TLV".addresses a
                 JOIN "TLV".permits   p ON ST_DWithin(a.geometry, p.geometry, 5)
-                WHERE p.sw_tama_38 = 'כן'
+                WHERE p.sw_tama_38         = 'כן'
                    OR p.sw_tama_38_chadash = 'כן'
                    OR p.sw_tama_38_tosefet = 'כן'
             """)).scalar() or 0
         except Exception:
             total = 0
 
-        # Already scraped
         scraped = 0
         if _table_exists(conn, "archive_timelines"):
             scraped = conn.execute(
                 text('SELECT COUNT(*) FROM "TLV".archive_timelines')
             ).scalar() or 0
 
-    coverage = (scraped / total * 100) if total else 0
-    info(f"Scraped {scraped:,} / {total:,} buildings  ({coverage:.1f}% coverage)")
+        # ── Last-scraped timestamp ─────────────────────────────────────────────
+        last_scraped_iso, _ = _meta_get(conn, "archive_last_scraped")
 
-    if coverage >= 95:
-        ok("Archive scrape complete")
+        # ── Changed-building count ─────────────────────────────────────────────
+        changed_count = None
+        if scraped and _table_exists(conn, "archive_timelines"):
+            try:
+                changed_count = conn.execute(text("""
+                    WITH current AS (
+                        SELECT DISTINCT ON (a.k_rechov, a.ms_bayit)
+                            a.k_rechov::integer AS k_rechov,
+                            a.ms_bayit::text    AS ms_bayit,
+                            md5(
+                                COALESCE(p.building_stage,          '') ||
+                                COALESCE(p.open_request::text,      '') ||
+                                COALESCE(p.permission_date::text,   '') ||
+                                COALESCE(p.tr_hathalat_bniya::text, '') ||
+                                COALESCE(p.finished::text,          '')
+                            ) AS gis_fingerprint
+                        FROM "TLV".addresses a
+                        JOIN "TLV".permits   p ON ST_DWithin(a.geometry, p.geometry, 5)
+                        WHERE (
+                            p.sw_tama_38         = 'כן'
+                         OR p.sw_tama_38_chadash = 'כן'
+                         OR p.sw_tama_38_tosefet = 'כן'
+                        )
+                        AND a.k_rechov IS NOT NULL
+                        AND a.ms_bayit IS NOT NULL
+                        ORDER BY a.k_rechov, a.ms_bayit, p.open_request DESC NULLS LAST
+                    )
+                    SELECT COUNT(*)
+                    FROM current c
+                    LEFT JOIN "TLV".archive_timelines t
+                           ON t.k_rechov = c.k_rechov
+                          AND t.ms_bayit  = c.ms_bayit
+                    WHERE t.k_rechov        IS NULL
+                       OR t.gis_fingerprint IS NULL
+                       OR t.gis_fingerprint != c.gis_fingerprint
+                """)).scalar() or 0
+            except Exception:
+                changed_count = None
+
+    coverage = (scraped / total * 100) if total else 0
+    info(f"Coverage: {scraped:,} / {total:,} buildings  ({coverage:.1f}%)")
+
+    # ── Initial scrape still incomplete ───────────────────────────────────────
+    if coverage < 95:
+        if scraped == 0:
+            warn("Initial scrape has not been started.")
+        else:
+            warn(f"Initial scrape is {coverage:.1f}% complete ({scraped:,}/{total:,}).")
+        info("Run manually:  python fetch_archive_bulk.py --delay 0.5")
+        info("The scraper is safe to interrupt and resume.")
         return
 
-    if scraped > 0:
-        warn(f"Scrape is {100 - coverage:.1f}% incomplete — resuming from building {scraped + 1}")
-    else:
-        info("Starting fresh scrape.  This takes 4–6 hours.")
-        info("You can interrupt with Ctrl+C and re-run setup.py — it will resume.")
+    # ── Initial scrape complete — freshness checks ────────────────────────────
+    ok("Initial scrape complete")
 
-    print()
-    try:
-        subprocess.run(
-            [sys.executable, str(HERE / "fetch_archive_bulk.py"), "--delay", "0.5"],
-            check=True,
+    age_days = None
+    if last_scraped_iso:
+        try:
+            last_dt = datetime.fromisoformat(last_scraped_iso)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(tz=timezone.utc) - last_dt).days
+            info(f"Last full scrape: {last_dt.date()} ({age_days} days ago)")
+        except ValueError:
+            info(f"Last full scrape: {last_scraped_iso}")
+    else:
+        info("Last full scrape: unknown (timestamp not recorded yet)")
+
+    if changed_count is not None:
+        if changed_count == 0:
+            ok("All GIS fingerprints match — no buildings need re-scraping")
+        else:
+            warn(f"{changed_count:,} buildings have changed or missing GIS status")
+            info("Run to update:  python fetch_archive_bulk.py --update --delay 0.5")
+
+    if age_days is not None and age_days > archive_refresh_days:
+        warn(
+            f"Archive data is {age_days} days old (threshold: {archive_refresh_days} days). "
+            "Consider running:  python fetch_archive_bulk.py --update --delay 0.5"
         )
-    except KeyboardInterrupt:
-        print()
-        warn("Scrape interrupted.  Re-run setup.py to continue from where it stopped.")
-    except subprocess.CalledProcessError as exc:
-        warn(f"Scrape exited with code {exc.returncode} — continuing with partial data")
 
 
 # ── Step 7 — ML model training ────────────────────────────────────────────────
@@ -441,11 +500,13 @@ def parse_args():
     p.add_argument("--force-refresh", action="store_true",
                    help="Re-fetch GIS data even if fresh")
     p.add_argument("--skip-scrape", action="store_true",
-                   help="Skip the Engineering Archive scrape")
+                   help="Skip the Engineering Archive scrape check")
     p.add_argument("--skip-train",  action="store_true",
                    help="Skip ML model training")
     p.add_argument("--skip-app",    action="store_true",
                    help="Run setup only, do not launch Flask")
+    p.add_argument("--archive-refresh-days", type=int, default=30,
+                   help="Warn if archive data is older than N days (default: 30)")
     p.add_argument("--host", default="127.0.0.1",
                    help="Flask bind host (default: 127.0.0.1)")
     p.add_argument("--port", type=int, default=5000,
@@ -467,7 +528,7 @@ def main():
     check_db()
     check_gis_data(args.refresh_days, args.force_refresh)
     check_neighborhoods()
-    check_archive_scrape(args.skip_scrape)
+    check_archive_scrape(args.skip_scrape, args.archive_refresh_days)
     check_model(args.skip_train)
 
     if not args.skip_app:
