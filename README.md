@@ -55,6 +55,13 @@ Steps 1, 4, and 5 are populated from the GIS permit layer.  Steps 2 and 3 are sc
 ### Completed TAMA38 Mode
 When a building has already completed TAMA38 (received a טופס 4 or completion certificate), the likelihood dashboard is hidden and replaced with a "TAMA38 History" view showing the full permit timeline with all five milestones.
 
+### Zoning Layer Overlay
+A toggle button (top-right of the map) shows/hides the Tel Aviv detailed land use plan (מגרשי ייעודי קרקע - מפורט, ArcGIS layer 837).
+
+- **Rendering** — tiles are served by the ArcGIS Export API, which applies the layer's own `drawingInfo` server-side.  All fill patterns are preserved exactly: solid residential zones, diagonal-hatched roads, cross-hatched open space, etc.
+- **Original colours** — on first toggle, the app fetches the `drawingInfo` renderer from `/api/zoning/style` and parses all 392 unique-value entries into a `{value → fill colour + label}` map (cached in-process).
+- **Click-to-identify** — while the layer is active, clicking anywhere on the map calls `/api/zoning/identify`, which proxies the ArcGIS identify API and returns the Hebrew zone name (e.g. "אזור מגורים א") with a matching colour swatch in a popup.
+
 ### Two-Phase Loading
 The UI renders GIS-derived data immediately, then enriches the timeline with archive data asynchronously (~10–15 s).  A skeleton shimmer animation indicates which steps are still loading.
 
@@ -177,6 +184,8 @@ MA_TAMA/
 | `GET` | `/api/archive_timeline?k_rechov=&ms_bayit=` | Permit milestones from Engineering Archive |
 | `GET` | `/api/neighborhood_stats` | GeoJSON FeatureCollection with per-neighbourhood completion rates |
 | `GET` | `/api/duration_stats` | Reference duration statistics used by the ML model |
+| `GET` | `/api/zoning/style` | Parsed drawingInfo renderer: `{value → fill/opacity/label}` for all 392 zone categories (cached) |
+| `GET` | `/api/zoning/identify?lat=&lng=` | Hebrew zone name at a clicked coordinate (proxies ArcGIS identify API) |
 
 ---
 
@@ -224,6 +233,7 @@ The model improves as `fetch_archive_bulk.py` scrapes more buildings (~2,900 tot
 - [x] ML completion forecast with time-ratio features and neighbourhood context
 - [x] Neighbourhood boundaries (71 Tel Aviv neighbourhoods)
 - [x] One-script setup (`setup.py`) — installs, fetches, trains, launches
+- [x] Zoning layer overlay with original ESRI symbology and click-to-identify
 - [ ] Neighbourhood-level heatmap view
 - [ ] Comparison tool for multiple addresses
 - [ ] Deploy to a cloud PostgreSQL service
