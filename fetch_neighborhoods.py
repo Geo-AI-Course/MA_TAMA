@@ -27,9 +27,8 @@ POSTGIS = {
 }
 
 # Tel Aviv ArcGIS MapServer candidates for the neighborhoods layer.
-# Layer /70  — commonly "שכונות" in the ILayer service.
-# Layer /338 — alternative in a planning service.
 _CANDIDATES = [
+    "https://gisn.tel-aviv.gov.il/ArcGIS/rest/services/IView2/MapServer/511",
     "https://gisn.tel-aviv.gov.il/arcgis/rest/services/WM_FW/ILayer/MapServer/70",
     "https://gisn.tel-aviv.gov.il/arcgis/rest/services/WM_FW/ILayer/MapServer/338",
     "https://gisn.tel-aviv.gov.il/arcgis/rest/services/WM_FW/ILayer/MapServer/71",

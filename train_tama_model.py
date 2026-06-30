@@ -199,8 +199,8 @@ def load_raw(conn) -> pd.DataFrame:
             p.sw_tama_38_chadash,
             b.year        AS building_year,
             b.ms_komot    AS building_floors,
-            ST_Y(ST_Transform(p.geometry, 4326)) AS lat,
-            ST_X(ST_Transform(p.geometry, 4326)) AS lon,
+            ST_Y(ST_Centroid(ST_Transform(p.geometry, 4326))) AS lat,
+            ST_X(ST_Centroid(ST_Transform(p.geometry, 4326))) AS lon,
             {nbhd_col}
             {archive_cols}
             a.k_rechov,
@@ -465,18 +465,36 @@ def train(X: pd.DataFrame, y: pd.Series) -> Pipeline:
     )
     pipe = Pipeline([("clf", clf)])
 
-    cv         = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    roc_scores = cross_val_score(pipe, X, y, cv=cv, scoring="roc_auc")
-    acc_scores = cross_val_score(pipe, X, y, cv=cv, scoring="accuracy")
+    minority_count = int(y.value_counts().min())
+    roc_mean = float("nan")
+    acc_mean = float("nan")
 
-    log.info(
-        "Cross-validation  ROC-AUC: %.3f ± %.3f   Accuracy: %.3f ± %.3f",
-        roc_scores.mean(), roc_scores.std(),
-        acc_scores.mean(), acc_scores.std(),
-    )
+    if minority_count < 10:
+        # Too few minority-class examples for reliable CV; skip it.
+        log.warning(
+            "Skipping cross-validation — minority class has only %d samples "
+            "(need >= 10 for stable CV).  Retrain after the archive scrape completes.",
+            minority_count,
+        )
+    else:
+        import numpy as _np
+        n_splits = min(5, max(3, len(y) // 60))
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        roc_scores = cross_val_score(pipe, X, y, cv=cv, scoring="roc_auc",
+                                     error_score=float("nan"))
+        acc_scores = cross_val_score(pipe, X, y, cv=cv, scoring="accuracy",
+                                     error_score=float("nan"))
+        valid_roc = roc_scores[~_np.isnan(roc_scores)]
+        valid_acc = acc_scores[~_np.isnan(acc_scores)]
+        roc_mean = float(valid_roc.mean()) if len(valid_roc) else float("nan")
+        acc_mean = float(valid_acc.mean()) if len(valid_acc) else float("nan")
+        log.info(
+            "Cross-validation (%d-fold)  ROC-AUC: %.3f   Accuracy: %.3f",
+            n_splits, roc_mean, acc_mean,
+        )
 
     pipe.fit(X, y)
-    return pipe, float(roc_scores.mean()), float(acc_scores.mean())
+    return pipe, roc_mean, acc_mean
 
 
 def feature_importances(pipe: Pipeline, feature_cols: list[str]) -> dict:
@@ -561,7 +579,7 @@ def main():
         "feature_cols":   used_features,
         "nbhd_classes":   nbhd_classes,
         "duration_stats": dur_stats,
-        "trained_at":     datetime.utcnow().isoformat(),
+        "trained_at":     datetime.now(timezone.utc).isoformat(),
         "n_completed":    int(labelled["label"].sum()),
         "n_stalled":      int((labelled["label"] == 0).sum()),
         "cv_roc_auc":     round(roc_auc, 4),

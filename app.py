@@ -446,6 +446,12 @@ def archive_timeline():
 
 
 if __name__ == "__main__":
+    import argparse as _ap
+    _p = _ap.ArgumentParser()
+    _p.add_argument("--host", default="127.0.0.1")
+    _p.add_argument("--port", type=int, default=5000)
+    _opts = _p.parse_args()
+
     # Pre-compile Playwright's .py files so the Werkzeug watchdog doesn't
     # detect file changes and restart mid-request when the scraper first runs.
     import compileall, site as _site
@@ -453,4 +459,4 @@ if __name__ == "__main__":
         compileall.compile_dir(_d, quiet=2, force=False)
 
     # use_reloader=False prevents a second watchdog restart loop
-    app.run(debug=True, port=5000, use_reloader=False)
+    app.run(debug=True, host=_opts.host, port=_opts.port, use_reloader=False)
