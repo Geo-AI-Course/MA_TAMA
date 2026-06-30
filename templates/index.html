@@ -659,6 +659,13 @@
     return Math.log(Math.tan((90 + lat) * Math.PI / 360)) / (Math.PI / 180) * 20037508.34 / 180;
   }
 
+  // Suppress label rendering via dynamicLayers (labels are index numbers on parcels).
+  const _ZONING_DYN = encodeURIComponent(JSON.stringify([{
+    id: 837,
+    source: { type: 'mapLayer', mapLayerId: 837 },
+    drawingInfo: { showLabels: false }
+  }]));
+
   const ZoningTileLayer = L.GridLayer.extend({
     createTile(coords, done) {
       const img = document.createElement('img');
@@ -670,7 +677,7 @@
         + `?bbox=${xmin},${ymin},${xmax},${ymax}`
         + `&bboxSR=3857&imageSR=3857`
         + `&size=${sz.x},${sz.y}`
-        + `&layers=show:837&format=png32&transparent=true&f=image`;
+        + `&dynamicLayers=${_ZONING_DYN}&format=png32&transparent=true&f=image`;
       img.onload  = () => done(null, img);
       img.onerror = () => done(new Error('zoning tile error'));
       return img;
@@ -734,7 +741,7 @@
     if (_zoningActive) {
       await _loadZoningStyles();
       if (!_zoningLayer)
-        _zoningLayer = new ZoningTileLayer({ opacity: 0.72, zIndex: 300 });
+        _zoningLayer = new ZoningTileLayer({ opacity: 0.4, zIndex: 300 });
       _zoningLayer.addTo(map);
       map.on('click', _zoningClick);
       if (_zoningBtn) _zoningBtn.classList.add('active');
@@ -747,7 +754,7 @@
   }
 
   const ZoningControl = L.Control.extend({
-    options: { position: 'topright' },
+    options: { position: 'topleft' },
     onAdd() {
       const c = L.DomUtil.create('div', 'leaflet-bar zoning-ctrl');
       _zoningBtn = L.DomUtil.create('a', '', c);
