@@ -242,6 +242,3 @@ The model improves as `fetch_archive_bulk.py` scrapes more buildings (~2,900 tot
 - [x] One-script setup (`setup.py`) — installs, fetches, trains, launches
 - [x] Zoning layer overlay with original ESRI symbology and click-to-identify
 - [x] Smart incremental archive updates via GIS fingerprinting (`--update` flag)
-- [ ] Neighbourhood-level heatmap view
-- [ ] Comparison tool for multiple addresses
-- [ ] Deploy to a cloud PostgreSQL service
