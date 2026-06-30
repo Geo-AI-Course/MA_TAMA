@@ -454,6 +454,35 @@
     .btn-archive:hover {
       background:#eff6ff; border-color:var(--primary); color:var(--primary);
     }
+
+    /* ── Zoning layer toggle ──────────────────────────────────────────────── */
+    .zoning-ctrl { background:#fff; border-radius:4px; }
+    .zoning-ctrl a {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #333;
+      text-decoration: none;
+      cursor: pointer;
+      border-radius: 4px;
+      white-space: nowrap;
+      transition: background .15s, color .15s;
+    }
+    .zoning-ctrl a:hover { background:#f5f5f5; }
+    .zoning-ctrl a.active { color:#1a56db; background:#eff6ff; }
+    .zoning-swatch {
+      width: 16px; height: 16px;
+      border-radius: 3px;
+      border: 1px solid #bbb;
+      flex-shrink: 0;
+      /* Mini-mosaic that hints at a zoning colour map */
+      background:
+        linear-gradient(135deg, #ff8c00 0 25%, #90c878 0 50%,
+                                #6699cc 0 75%, #cc88cc 0 100%);
+    }
   </style>
 </head>
 <body>
@@ -610,6 +639,124 @@
 
   let activeLayer  = null;
   let nearbyLayer  = null;
+
+  // ── Zoning layer ────────────────────────────────────────────────────────────
+  // Rendering : ArcGIS Export API tiles → exact server-side symbology
+  //             (solid fills, diagonal/cross hatching, all patterns preserved).
+  // Colours   : drawingInfo renderer fetched from /api/zoning/style and used
+  //             to style a transparent click-capture GeoJSON overlay so that
+  //             clicking any zone shows its Hebrew category name.
+  // Identify  : on map click while active → /api/zoning/identify → popup.
+
+  const _ZONING_EXPORT =
+    'https://gisn.tel-aviv.gov.il/ArcGIS/rest/services/IView2/MapServer/export';
+
+  // ① Tile layer that calls the ESRI Export API for each 256×256 tile.
+  //    The server reads its own drawingInfo and renders each polygon with the
+  //    correct fill colour AND pattern (e.g. diagonal hatching for roads).
+  const ZoningTileLayer = L.GridLayer.extend({
+    createTile(coords, done) {
+      const img = document.createElement('img');
+      const sz  = this.getTileSize();
+      const b   = this._tileCoordsToBounds(coords);
+      img.src = _ZONING_EXPORT
+        + `?bbox=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`
+        + `&bboxSR=4326&imageSR=4326`
+        + `&size=${sz.x},${sz.y}`
+        + `&layers=show:837&format=png32&transparent=true&f=image`;
+      img.onload  = () => done(null, img);
+      img.onerror = () => done(new Error('zoning tile error'));
+      return img;
+    }
+  });
+
+  // ② Style map – populated once when the layer is first toggled on.
+  let _zoningStyles   = null;   // Map<value, {fill,fillOpacity,stroke,weight,label}>
+  let _zoningLayer    = null;   // ZoningTileLayer instance
+  let _zoningActive   = false;
+  let _zoningBtn      = null;
+  let _zoningPopup    = null;   // active identify popup
+
+  async function _loadZoningStyles() {
+    if (_zoningStyles) return;
+    try {
+      const r = await fetch('/api/zoning/style');
+      const d = await r.json();
+      _zoningStyles = d.styles || {};
+    } catch (e) {
+      console.warn('Could not load zoning style info', e);
+      _zoningStyles = {};
+    }
+  }
+
+  // ③ Click handler – calls /api/zoning/identify and shows a popup.
+  async function _zoningClick(e) {
+    if (_zoningPopup) { map.closePopup(_zoningPopup); _zoningPopup = null; }
+    try {
+      const r = await fetch(
+        `/api/zoning/identify?lat=${e.latlng.lat}&lng=${e.latlng.lng}`
+      );
+      const d = await r.json();
+      if (!d.label) return;
+
+      // Look up the fill colour for this zone value to paint a swatch.
+      const st    = (_zoningStyles && _zoningStyles[d.value]) || {};
+      const swatch = st.fill
+        ? `<span style="display:inline-block;width:12px;height:12px;
+                        border-radius:2px;background:${st.fill};
+                        border:1px solid #888;margin-left:4px;
+                        vertical-align:middle"></span>`
+        : '';
+
+      _zoningPopup = L.popup({ maxWidth: 260 })
+        .setLatLng(e.latlng)
+        .setContent(
+          `<div style="font-size:13px;line-height:1.5">
+             <b>ייעוד קרקע</b>${swatch}<br>
+             <span dir="rtl">${d.label}</span>
+           </div>`
+        )
+        .openOn(map);
+    } catch (err) {
+      console.warn('Zoning identify error', err);
+    }
+  }
+
+  async function toggleZoning() {
+    _zoningActive = !_zoningActive;
+    if (_zoningActive) {
+      await _loadZoningStyles();
+      if (!_zoningLayer)
+        _zoningLayer = new ZoningTileLayer({ opacity: 0.72, zIndex: 300 });
+      _zoningLayer.addTo(map);
+      map.on('click', _zoningClick);
+      if (_zoningBtn) _zoningBtn.classList.add('active');
+    } else {
+      if (_zoningLayer)  map.removeLayer(_zoningLayer);
+      if (_zoningPopup) { map.closePopup(_zoningPopup); _zoningPopup = null; }
+      map.off('click', _zoningClick);
+      if (_zoningBtn) _zoningBtn.classList.remove('active');
+    }
+  }
+
+  const ZoningControl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd() {
+      const c = L.DomUtil.create('div', 'leaflet-bar zoning-ctrl');
+      _zoningBtn = L.DomUtil.create('a', '', c);
+      _zoningBtn.href  = '#';
+      _zoningBtn.title = 'Toggle Tel Aviv Zoning Plan – מגרשי ייעודי קרקע';
+      _zoningBtn.innerHTML =
+        '<span class="zoning-swatch"></span>Zoning';
+      L.DomEvent.disableClickPropagation(c);
+      L.DomEvent.on(_zoningBtn, 'click', e => {
+        L.DomEvent.preventDefault(e);
+        toggleZoning();
+      });
+      return c;
+    }
+  });
+  map.addControl(new ZoningControl());
 
   // ── Status bar ────────────────────────────────────────────────────────────
   function setStatus(msg, state = "ok") {

@@ -10,6 +10,7 @@ Endpoints:
 import json
 import logging
 
+import requests as _requests
 from flask import Flask, jsonify, render_template, request
 from sqlalchemy import create_engine, text
 
@@ -443,6 +444,103 @@ def archive_timeline():
         log.warning("Archive scrape subprocess failed: %s", exc)
         timeline = {}
     return jsonify({"timeline": timeline})
+
+
+# ── Zoning layer helpers ──────────────────────────────────────────────────────
+
+_ZONING_LAYER_URL = (
+    "https://gisn.tel-aviv.gov.il/ArcGIS/rest/services/IView2/MapServer/837"
+)
+_zoning_style_cache: dict | None = None
+
+
+def _rgba_hex(rgba: list) -> str:
+    r, g, b = rgba[0], rgba[1], rgba[2]
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _parse_sym(sym: dict, label: str = "") -> dict:
+    fill  = sym.get("color", [0, 0, 0, 0])
+    out   = (sym.get("outline") or {})
+    ocol  = out.get("color", [0, 0, 0, 0])
+    return {
+        "fill":        _rgba_hex(fill),
+        "fillOpacity": round(fill[3] / 255, 2) if len(fill) > 3 else 1.0,
+        "stroke":      _rgba_hex(ocol) if len(ocol) > 3 and ocol[3] > 0 else "#555",
+        "weight":      out.get("width", 0.4),
+        "pattern":     sym.get("style", "esriSFSSolid"),
+        "label":       label,
+    }
+
+
+@app.route("/api/zoning/style")
+def zoning_style():
+    """Return a compact value→style map built from the layer's drawingInfo."""
+    global _zoning_style_cache
+    if _zoning_style_cache is not None:
+        return jsonify(_zoning_style_cache)
+
+    try:
+        resp = _requests.get(_ZONING_LAYER_URL, params={"f": "json"}, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        log.warning("Failed to fetch zoning layer info: %s", exc)
+        return jsonify({"error": str(exc)}), 502
+
+    renderer = data.get("drawingInfo", {}).get("renderer", {})
+    styles: dict = {}
+
+    default_sym = renderer.get("defaultSymbol")
+    if default_sym:
+        styles["__default__"] = _parse_sym(default_sym, renderer.get("defaultLabel", "אחר"))
+
+    for info in renderer.get("uniqueValueInfos", []):
+        styles[str(info["value"])] = _parse_sym(info["symbol"], info.get("label", ""))
+
+    _zoning_style_cache = {"styles": styles}
+    return jsonify(_zoning_style_cache)
+
+
+@app.route("/api/zoning/identify")
+def zoning_identify():
+    """Return the zone at a lat/lng click point via ArcGIS identify."""
+    lat  = request.args.get("lat", type=float)
+    lng  = request.args.get("lng", type=float)
+    if lat is None or lng is None:
+        return jsonify({"error": "lat and lng required"}), 400
+
+    # Build a tiny bbox around the click point
+    d = 0.0005
+    params = {
+        "geometry":     f"{lng},{lat}",
+        "geometryType": "esriGeometryPoint",
+        "layers":       "all:837",
+        "sr":           "4326",
+        "mapExtent":    f"{lng-d},{lat-d},{lng+d},{lat+d}",
+        "imageDisplay": "1,1,96",
+        "tolerance":    "3",
+        "returnGeometry": "false",
+        "f":            "json",
+    }
+    try:
+        resp = _requests.get(
+            "https://gisn.tel-aviv.gov.il/ArcGIS/rest/services/IView2/MapServer/identify",
+            params=params, timeout=10,
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        if results:
+            attrs = results[0].get("attributes", {})
+            return jsonify({
+                "label":       attrs.get("t_yeud") or attrs.get("t_yeud_karka") or "—",
+                "value":       str(attrs.get("k_yeud_karka", "")),
+                "layerName":   results[0].get("layerName", ""),
+            })
+        return jsonify({"label": None})
+    except Exception as exc:
+        log.warning("Zoning identify failed: %s", exc)
+        return jsonify({"error": str(exc)}), 502
 
 
 if __name__ == "__main__":
