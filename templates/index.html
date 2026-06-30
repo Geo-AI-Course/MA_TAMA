@@ -760,8 +760,7 @@
       _zoningBtn = L.DomUtil.create('a', '', c);
       _zoningBtn.href  = '#';
       _zoningBtn.title = 'Toggle Tel Aviv Zoning Plan – מגרשי ייעודי קרקע';
-      _zoningBtn.innerHTML =
-        '<span class="zoning-swatch"></span>Zoning';
+      _zoningBtn.innerHTML = '<span class="zoning-swatch"></span>';
       L.DomEvent.disableClickPropagation(c);
       L.DomEvent.on(_zoningBtn, 'click', e => {
         L.DomEvent.preventDefault(e);
