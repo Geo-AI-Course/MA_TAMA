@@ -20,7 +20,7 @@ import sys as _sys
 from datetime import date as _date
 
 from tama_score import compute_tama_score
-from ml_score import predict_completion_proba
+from ml_score import predict_completion_proba, duration_stats as _ml_duration_stats
 
 _WORKER = _os.path.join(_os.path.dirname(__file__), "_scrape_worker.py")
 
@@ -225,7 +225,7 @@ def search():
     )
     if has_active_permit:
         try:
-            tl = tama.get("timeline", {})
+            tl    = tama.get("timeline", {})
             today = _date.today()
 
             def _iso_days(a_str, b_str=None):
@@ -235,15 +235,19 @@ def search():
                 b = _date.fromisoformat(b_str) if b_str else today
                 return (b - a).days
 
+            # Most-recent milestone determines recency (staleness signal)
+            _last = tl.get("build") or tl.get("permit") or tl.get("form1")
+
             ml_features = {
-                "days_since_form1":     _iso_days(tl.get("form1")),
-                "days_form1_to_permit": _iso_days(tl.get("form1"), tl.get("permit")),
-                "days_permit_to_build": _iso_days(tl.get("permit"), tl.get("build")),
-                "has_permit":           int(bool(tl.get("permit"))),
-                "has_construction":     int(bool(tl.get("build"))),
-                "building_year":        year,
-                "building_floors":      ms_komot,
-                "is_track2":            int(any(
+                "days_since_form1":         _iso_days(tl.get("form1")),
+                "days_form1_to_permit":     _iso_days(tl.get("form1"), tl.get("permit")),
+                "days_permit_to_build":     _iso_days(tl.get("permit"), tl.get("build")),
+                "days_since_last_milestone": _iso_days(_last),
+                "has_permit":               int(bool(tl.get("permit"))),
+                "has_construction":         int(bool(tl.get("build"))),
+                "building_year":            year,
+                "building_floors":          ms_komot,
+                "is_track2":                int(any(
                     p.get("sw_tama_38_chadash") == "כן" for p in permits
                 )),
                 "lat": float(lat) if lat else None,
@@ -395,6 +399,19 @@ def neighborhood_stats():
             },
         })
     return jsonify({"type": "FeatureCollection", "features": features})
+
+
+@app.route("/api/duration_stats")
+def duration_stats_endpoint():
+    """
+    Return TAMA38 duration statistics derived from completed buildings.
+    Populated after train_tama_model.py has been run.
+    Used by the frontend to show "typical timeline" context.
+    """
+    stats = _ml_duration_stats()
+    if not stats:
+        return jsonify({"error": "Model not trained yet — run train_tama_model.py"}), 404
+    return jsonify(stats)
 
 
 @app.route("/api/archive_timeline")

@@ -6,40 +6,43 @@ What it predicts
 For a building that ALREADY HAS an active TAMA38 permit:
   → probability it will eventually reach Form 4 (אכלוס / occupancy)
 
-This is distinct from the rule-based candidate score shown for buildings
-with *no* permit yet.
-
 Label definition
 ----------------
-  1  = completed  : `finished` field is set, or building_stage in completed set
-  0  = stalled    : open_request > STALE_YEARS years ago AND no permit obtained
-                    (or permit > STALE_YEARS years ago with no finished)
-  skip (excluded) : recent permits still within plausible completion window
+  1  = completed  : `finished` is set, or building_stage in completed set
+  0  = stalled    : days_since_form1 > stale_threshold (data-driven from p90
+                    of completed buildings, with 30% grace period)
+  skip            : recent permits still within plausible completion window
 
 Features
 --------
-From GIS (TLV.permits + TLV.buildings):
-  days_since_form1         current age of the permit file (days)
-  days_form1_to_permit     speed of initial approval (-1 if no permit yet)
-  days_permit_to_build     time from permit to construction start (-1 if N/A)
-  has_permit               bool: reached permit stage
-  has_construction         bool: construction has started
-  building_year            year built (pre-1980 = high TAMA38 suitability)
-  building_floors          floor count
-  is_track2                TAMA38 chadash (demolish & rebuild)
-  lat, lon                 WGS84 centroid
+Base (GIS + buildings):
+  days_since_form1         how long the file has been open (days)
+  days_form1_to_permit     speed of initial approval (NaN if no permit yet)
+  days_permit_to_build     permit → construction start (NaN if N/A)
+  days_since_last_milestone  days since most recent recorded milestone
+  has_permit               0/1
+  has_construction         0/1
+  building_year
+  building_floors
+  is_track2                TAMA38 chadash
+  lat, lon
 
-From TLV.archive_timelines (if fetch_archive_bulk.py has been run):
-  days_form1_to_verbal     form1 → verbal permit (archive data)
-  days_verbal_to_signed    verbal → signed permit (archive data)
+Time-ratio (derived from duration stats of completed buildings):
+  progress_pct          days_since_form1 / median(form1→form4) — how "overdue"
+  permit_speed_ratio    days_form1_to_permit / median(form1→permit) — fast/slow
+  days_past_p75_total   max(0, days_since_form1 - p75(form1→form4))
 
-From TLV.neighborhoods (if fetch_neighborhoods.py has been run):
-  neighborhood             label-encoded neighborhood name
+Archive (if fetch_archive_bulk.py has run):
+  days_form1_to_verbal
+  days_verbal_to_signed
+
+Neighborhood (if fetch_neighborhoods.py has run):
+  neighborhood_enc      label-encoded
 
 Outputs
 -------
-  tama_model.pkl           sklearn Pipeline (saved with pickle)
-  tama_model_meta.json     feature list, metrics, training timestamp
+  tama_model.pkl       {"pipeline", "feature_cols", "nbhd_classes"}
+  tama_model_meta.json  feature list, duration_stats, CV metrics, importances
 
 Usage
 -----
@@ -73,8 +76,8 @@ POSTGIS = {
     "password": "mypassword",
 }
 
-STALE_YEARS = 4          # permits older than this with no completion → label 0
-MIN_SAMPLES = 20         # abort if fewer labelled samples than this
+FALLBACK_STALE_YEARS = 5   # used only when no completed buildings exist yet
+MIN_SAMPLES          = 20
 
 MODEL_PATH = Path(__file__).parent / "tama_model.pkl"
 META_PATH  = Path(__file__).parent / "tama_model_meta.json"
@@ -86,10 +89,12 @@ engine = create_engine(
 
 _COMPLETED_STAGES = {"קיים אכלוס", "קיימת לפחות תעודת גמר אחת"}
 
-FEATURE_COLS = [
+# Features that don't require the duration stats — computed unconditionally
+_BASE_FEATURES = [
     "days_since_form1",
     "days_form1_to_permit",
     "days_permit_to_build",
+    "days_since_last_milestone",
     "has_permit",
     "has_construction",
     "building_year",
@@ -99,6 +104,13 @@ FEATURE_COLS = [
     "lon",
     "days_form1_to_verbal",
     "days_verbal_to_signed",
+]
+
+# Ratio features added after duration stats are known
+_TIME_RATIO_FEATURES = [
+    "progress_pct",         # days_since_form1 / median(form1→form4)
+    "permit_speed_ratio",   # days_form1_to_permit / median(form1→permit)
+    "days_past_p75_total",  # max(0, days_since_form1 - p75(form1→form4))
 ]
 
 
@@ -217,71 +229,220 @@ def load_raw(conn) -> pd.DataFrame:
 def engineer(df: pd.DataFrame) -> pd.DataFrame:
     today = date.today()
 
-    df["d_form1"]   = df["open_request"].apply(_unix_ms_to_date)
-    df["d_permit"]  = df["permission_date"].apply(_unix_ms_to_date)
-    df["d_build"]   = df["tr_hathalat_bniya"].apply(_unix_ms_to_date)
-    df["d_form4"]   = df["finished"].apply(_ddmmyyyy_to_date)
+    df["d_form1"]  = df["open_request"].apply(_unix_ms_to_date)
+    df["d_permit"] = df["permission_date"].apply(_unix_ms_to_date)
+    df["d_build"]  = df["tr_hathalat_bniya"].apply(_unix_ms_to_date)
+    df["d_form4"]  = df["finished"].apply(_ddmmyyyy_to_date)
 
-    df["arch_form1"]   = df["arch_form1"].apply(_iso_to_date)
-    df["arch_verbal"]  = df["arch_verbal"].apply(_iso_to_date)
-    df["arch_signed"]  = df["arch_signed"].apply(_iso_to_date)
-    df["arch_form4"]   = df["arch_form4"].apply(_iso_to_date)
+    df["arch_form1"]  = df["arch_form1"].apply(_iso_to_date)
+    df["arch_verbal"] = df["arch_verbal"].apply(_iso_to_date)
+    df["arch_signed"] = df["arch_signed"].apply(_iso_to_date)
+    df["arch_form4"]  = df["arch_form4"].apply(_iso_to_date)
 
-    # Use archive dates to fill gaps in GIS dates
-    df["d_form1"]  = df.apply(lambda r: r["d_form1"]  or r["arch_form1"],  axis=1)
-    df["d_form4"]  = df.apply(lambda r: r["d_form4"]  or r["arch_form4"],  axis=1)
+    # Fill GIS gaps from archive
+    df["d_form1"] = df.apply(lambda r: r["d_form1"] or r["arch_form1"], axis=1)
+    df["d_form4"] = df.apply(lambda r: r["d_form4"] or r["arch_form4"], axis=1)
 
+    # Base durations
     df["days_since_form1"]      = df["d_form1"].apply(lambda d: _days(d, today) if d else np.nan)
-    df["days_form1_to_permit"]  = df.apply(lambda r: _days(r["d_form1"],  r["d_permit"]), axis=1)
+    df["days_form1_to_permit"]  = df.apply(lambda r: _days(r["d_form1"], r["d_permit"]), axis=1)
     df["days_permit_to_build"]  = df.apply(lambda r: _days(r["d_permit"], r["d_build"]),  axis=1)
-    df["days_form1_to_verbal"]  = df.apply(lambda r: _days(r["d_form1"],  r["arch_verbal"]), axis=1)
+    df["days_form1_to_form4"]   = df.apply(lambda r: _days(r["d_form1"], r["d_form4"]),   axis=1)
+    df["days_form1_to_verbal"]  = df.apply(lambda r: _days(r["d_form1"], r["arch_verbal"]), axis=1)
     df["days_verbal_to_signed"] = df.apply(lambda r: _days(r["arch_verbal"], r["arch_signed"]), axis=1)
+
+    # Time since most recent recorded milestone (activity recency)
+    def _last_milestone_days(row) -> float:
+        if row["d_build"]:
+            return _days(row["d_build"], today)
+        if row["d_permit"]:
+            return _days(row["d_permit"], today)
+        if row["d_form1"]:
+            return _days(row["d_form1"], today)
+        return np.nan
+
+    df["days_since_last_milestone"] = df.apply(_last_milestone_days, axis=1)
 
     df["has_permit"]      = df["d_permit"].notna().astype(float)
     df["has_construction"] = df["d_build"].notna().astype(float)
 
-    try:
-        df["building_year"]   = pd.to_numeric(df["building_year"],   errors="coerce")
-        df["building_floors"] = pd.to_numeric(df["building_floors"], errors="coerce")
-    except Exception:
-        pass
+    df["building_year"]   = pd.to_numeric(df["building_year"],   errors="coerce")
+    df["building_floors"] = pd.to_numeric(df["building_floors"], errors="coerce")
+    df["is_track2"]       = (df["sw_tama_38_chadash"] == "כן").astype(float)
+    df["lat"]             = pd.to_numeric(df["lat"], errors="coerce")
+    df["lon"]             = pd.to_numeric(df["lon"], errors="coerce")
 
-    df["is_track2"] = (df["sw_tama_38_chadash"] == "כן").astype(float)
-    df["lat"]  = pd.to_numeric(df["lat"], errors="coerce")
-    df["lon"]  = pd.to_numeric(df["lon"], errors="coerce")
-
-    # Label
+    # Completion flag
     df["is_completed"] = (
         df["building_stage"].isin(_COMPLETED_STAGES) | df["d_form4"].notna()
     )
 
-    stale_days = STALE_YEARS * 365
+    return df
+
+
+# ── Duration statistics ───────────────────────────────────────────────────────
+
+def compute_duration_stats(df: pd.DataFrame) -> dict:
+    """
+    Compute percentile statistics from completed buildings only.
+    These become the reference distribution for normalizing time-ratio features.
+    """
+    comp = df[df["is_completed"]].copy()
+    n    = len(comp)
+
+    def _stat(series: pd.Series) -> dict | None:
+        valid = series.dropna()
+        if len(valid) < 5:
+            return None
+        return {
+            "n":      int(len(valid)),
+            "median": round(float(valid.median()), 1),
+            "mean":   round(float(valid.mean()),   1),
+            "std":    round(float(valid.std()),    1),
+            "p25":    round(float(valid.quantile(0.25)), 1),
+            "p75":    round(float(valid.quantile(0.75)), 1),
+            "p90":    round(float(valid.quantile(0.90)), 1),
+        }
+
+    stats = {k: v for k, v in {
+        "form1_to_form4":    _stat(comp["days_form1_to_form4"]),
+        "form1_to_permit":   _stat(comp["days_form1_to_permit"]),
+        "permit_to_form4":   _stat(
+            (comp["d_form4"] - comp["d_permit"]).dt.days.apply(
+                lambda x: float(x) if pd.notna(x) else np.nan
+            ) if hasattr(comp["d_form4"], "dt") else
+            comp.apply(lambda r: _days(r["d_permit"], r["d_form4"]), axis=1)
+        ),
+        "permit_to_build":   _stat(comp["days_permit_to_build"]),
+        "form1_to_verbal":   _stat(comp["days_form1_to_verbal"]),
+        "verbal_to_signed":  _stat(comp["days_verbal_to_signed"]),
+    }.items() if v is not None}
+
+    _print_duration_stats(stats, n)
+    return stats
+
+
+def _print_duration_stats(stats: dict, n_completed: int):
+    _LABELS = {
+        "form1_to_permit":   "Form 1 → Permit",
+        "permit_to_build":   "Permit → Construction start",
+        "permit_to_form4":   "Permit → Form 4",
+        "form1_to_form4":    "Form 1 → Form 4  (total)",
+        "form1_to_verbal":   "Form 1 → Verbal permit  (archive)",
+        "verbal_to_signed":  "Verbal → Signed permit  (archive)",
+    }
+    _ORDER = [
+        "form1_to_permit", "permit_to_build", "permit_to_form4",
+        "form1_to_form4", "form1_to_verbal", "verbal_to_signed",
+    ]
+
+    lines = [
+        f"\n{'─'*72}",
+        f"  TAMA38 Duration Statistics  (N = {n_completed} completed buildings)",
+        f"{'─'*72}",
+        f"  {'Stage':<40s} {'Median':>7} {'Mean':>7} {'P25':>7} {'P75':>7} {'P90':>7}",
+        f"  {'─'*40} {'─'*7} {'─'*7} {'─'*7} {'─'*7} {'─'*7}",
+    ]
+    for key in _ORDER:
+        if key not in stats:
+            continue
+        s   = stats[key]
+        lbl = _LABELS.get(key, key)
+
+        def _fmt(v):
+            if v >= 365:
+                return f"{v/365:.1f}y"
+            return f"{int(v)}d"
+
+        lines.append(
+            f"  {lbl:<40s} {_fmt(s['median']):>7} {_fmt(s['mean']):>7} "
+            f"{_fmt(s['p25']):>7} {_fmt(s['p75']):>7} {_fmt(s['p90']):>7}"
+        )
+    lines.append(f"{'─'*72}\n")
+    log.info("\n".join(lines))
+
+
+def add_time_ratio_features(df: pd.DataFrame, stats: dict) -> pd.DataFrame:
+    """
+    Add three normalised time features using the reference distribution
+    of completed buildings.  These features capture WHERE each building
+    sits relative to the typical timeline — the core of the time-factor ask.
+    """
+    df = df.copy()
+
+    # ── progress_pct ─────────────────────────────────────────────────────────
+    # 0 = just submitted, 1 = at median completion time, >1 = overdue
+    if "form1_to_form4" in stats:
+        med = stats["form1_to_form4"]["median"]
+        df["progress_pct"] = (df["days_since_form1"] / med).clip(0, 3.0)
+    else:
+        df["progress_pct"] = np.nan
+
+    # ── permit_speed_ratio ───────────────────────────────────────────────────
+    # <1 = faster than median, >1 = slower.  NaN if no permit yet.
+    if "form1_to_permit" in stats:
+        med = stats["form1_to_permit"]["median"]
+        df["permit_speed_ratio"] = df["days_form1_to_permit"] / med
+    else:
+        df["permit_speed_ratio"] = np.nan
+
+    # ── days_past_p75_total ──────────────────────────────────────────────────
+    # Days elapsed beyond the p75 typical total duration.
+    # 0 means still within normal range; large values signal prolonged stall.
+    if "form1_to_form4" in stats:
+        p75 = stats["form1_to_form4"]["p75"]
+        df["days_past_p75_total"] = (df["days_since_form1"] - p75).clip(lower=0)
+    else:
+        df["days_past_p75_total"] = np.nan
+
+    return df
+
+
+# ── Label definition (data-driven stale threshold) ────────────────────────────
+
+def assign_labels(df: pd.DataFrame, stats: dict) -> pd.DataFrame:
+    """
+    Stale threshold = p90(form1→form4) × 1.3  — 30% beyond the very longest
+    typical project.  Falls back to FALLBACK_STALE_YEARS if stats unavailable.
+    """
+    if "form1_to_form4" in stats:
+        stale_days = stats["form1_to_form4"]["p90"] * 1.3
+        log.info(
+            "Stale threshold: %.0f days (p90=%.0f × 1.3)",
+            stale_days, stats["form1_to_form4"]["p90"],
+        )
+    else:
+        stale_days = FALLBACK_STALE_YEARS * 365
+        log.info("Stale threshold: %.0f days (fallback — no stats yet)", stale_days)
+
+    df = df.copy()
     df["is_stalled"] = (
         ~df["is_completed"] &
         df["days_since_form1"].gt(stale_days)
     )
-
     return df
 
 
 # ── Neighbourhood analysis ────────────────────────────────────────────────────
 
 def neighborhood_analysis(df: pd.DataFrame) -> pd.DataFrame:
-    if df["neighborhood"].isna().all():
+    if "neighborhood" not in df.columns or df["neighborhood"].isna().all():
         log.warning("No neighborhood data — run fetch_neighborhoods.py first")
         return pd.DataFrame()
 
     grp = df.dropna(subset=["neighborhood"]).copy()
-    grp["label_known"] = grp["is_completed"] | grp["is_stalled"]
-    grp = grp[grp["label_known"]]
+    grp = grp[grp["is_completed"] | grp["is_stalled"]]
+
+    if grp.empty:
+        return pd.DataFrame()
 
     stats = (
         grp.groupby("neighborhood")
         .agg(
-            total         = ("is_completed", "count"),
-            completed     = ("is_completed", "sum"),
-            avg_days_form1_to_permit = ("days_form1_to_permit", "mean"),
-            avg_days_form1_to_form4  = ("days_since_form1",     "mean"),
+            total                    = ("is_completed", "count"),
+            completed                = ("is_completed", "sum"),
+            median_days_form1_permit = ("days_form1_to_permit",  "median"),
+            median_days_total        = ("days_form1_to_form4",   "median"),
         )
         .assign(completion_rate=lambda d: (d["completed"] / d["total"]).round(3))
         .sort_values("completion_rate", ascending=False)
@@ -294,7 +455,6 @@ def neighborhood_analysis(df: pd.DataFrame) -> pd.DataFrame:
 # ── Model training ────────────────────────────────────────────────────────────
 
 def train(X: pd.DataFrame, y: pd.Series) -> Pipeline:
-    # HistGradientBoostingClassifier handles NaN natively — no imputation needed
     clf = HistGradientBoostingClassifier(
         max_iter=300,
         max_depth=5,
@@ -305,9 +465,9 @@ def train(X: pd.DataFrame, y: pd.Series) -> Pipeline:
     )
     pipe = Pipeline([("clf", clf)])
 
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    roc_scores  = cross_val_score(pipe, X, y, cv=cv, scoring="roc_auc")
-    acc_scores  = cross_val_score(pipe, X, y, cv=cv, scoring="accuracy")
+    cv         = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    roc_scores = cross_val_score(pipe, X, y, cv=cv, scoring="roc_auc")
+    acc_scores = cross_val_score(pipe, X, y, cv=cv, scoring="accuracy")
 
     log.info(
         "Cross-validation  ROC-AUC: %.3f ± %.3f   Accuracy: %.3f ± %.3f",
@@ -316,18 +476,18 @@ def train(X: pd.DataFrame, y: pd.Series) -> Pipeline:
     )
 
     pipe.fit(X, y)
-    return pipe
+    return pipe, float(roc_scores.mean()), float(acc_scores.mean())
 
 
 def feature_importances(pipe: Pipeline, feature_cols: list[str]) -> dict:
-    clf = pipe.named_steps["clf"]
+    clf  = pipe.named_steps["clf"]
     imps = {}
     if hasattr(clf, "feature_importances_"):
         for name, imp in zip(feature_cols, clf.feature_importances_):
             imps[name] = round(float(imp), 4)
         ranked = sorted(imps.items(), key=lambda x: -x[1])
         log.info("Feature importances:\n%s",
-                 "\n".join(f"  {n:<30s} {v:.4f}" for n, v in ranked))
+                 "\n".join(f"  {n:<35s} {v:.4f}" for n, v in ranked))
     return imps
 
 
@@ -339,58 +499,73 @@ def main():
 
     df = engineer(raw)
 
-    # Labelled subset
+    # Duration statistics — computed from completed buildings
+    dur_stats = compute_duration_stats(df)
+
+    # Time-ratio features (require stats)
+    df = add_time_ratio_features(df, dur_stats)
+
+    # Data-driven labels
+    df = assign_labels(df, dur_stats)
+
     labelled = df[df["is_completed"] | df["is_stalled"]].copy()
     labelled["label"] = labelled["is_completed"].astype(int)
 
     log.info(
         "Labelled samples — completed: %d  stalled: %d  total: %d",
-        labelled["label"].sum(),
-        (labelled["label"] == 0).sum(),
+        int(labelled["label"].sum()),
+        int((labelled["label"] == 0).sum()),
         len(labelled),
     )
 
     if len(labelled) < MIN_SAMPLES:
         log.error(
-            "Only %d labelled samples — not enough to train a reliable model.\n"
+            "Only %d labelled samples — not enough to train reliably.\n"
             "Run fetch_archive_bulk.py to collect more data first.",
             len(labelled),
         )
         sys.exit(1)
 
-    # Neighbourhood analysis (informational only)
+    # Neighbourhood analysis
     neighborhood_analysis(df)
 
-    # Feature matrix
-    X = labelled[FEATURE_COLS].copy()
-    y = labelled["label"]
+    # Full feature set
+    used_features = _BASE_FEATURES + _TIME_RATIO_FEATURES
 
-    # Encode neighborhood as an additional ordinal feature if present
+    # Encode neighbourhood if available
+    nbhd_classes = []
     if "neighborhood" in labelled.columns and not labelled["neighborhood"].isna().all():
         le = LabelEncoder()
-        X = X.copy()
-        X["neighborhood_enc"] = le.fit_transform(
-            labelled["neighborhood"].fillna("Unknown")
-        ).astype(float)
-        used_features = FEATURE_COLS + ["neighborhood_enc"]
-        nbhd_classes = list(le.classes_)
-    else:
-        used_features = FEATURE_COLS
-        nbhd_classes  = []
+        nbhd_enc = le.fit_transform(labelled["neighborhood"].fillna("Unknown")).astype(float)
+        labelled = labelled.copy()
+        labelled["neighborhood_enc"] = nbhd_enc
+        used_features = used_features + ["neighborhood_enc"]
+        nbhd_classes  = list(le.classes_)
 
-    pipe = train(X[used_features], y)
+    X = labelled[used_features].copy()
+    y = labelled["label"]
+
+    pipe, roc_auc, accuracy = train(X, y)
     imps = feature_importances(pipe, used_features)
 
     # Save model
     with open(MODEL_PATH, "wb") as f:
-        pickle.dump({"pipeline": pipe, "feature_cols": used_features, "nbhd_classes": nbhd_classes}, f)
+        pickle.dump({
+            "pipeline":      pipe,
+            "feature_cols":  used_features,
+            "nbhd_classes":  nbhd_classes,
+            "duration_stats": dur_stats,
+        }, f)
 
     meta = {
         "feature_cols":   used_features,
         "nbhd_classes":   nbhd_classes,
+        "duration_stats": dur_stats,
         "trained_at":     datetime.utcnow().isoformat(),
         "n_completed":    int(labelled["label"].sum()),
         "n_stalled":      int((labelled["label"] == 0).sum()),
+        "cv_roc_auc":     round(roc_auc, 4),
+        "cv_accuracy":    round(accuracy, 4),
         "importances":    imps,
     }
     with open(META_PATH, "w", encoding="utf-8") as f:
