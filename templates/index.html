@@ -231,6 +231,18 @@
       margin-bottom: 10px;
     }
 
+    /* ── Completed-mode overrides for the score section ────────────────── */
+    .score-section.done .score-ring-wrap { display: none; }
+    .score-section.done .score-right { width: 100%; }
+    .score-section.done .signals { display: none; }
+    .score-section.done .outlook-badge {
+      display: block;
+      font-size: .85rem;
+      padding: 8px 14px;
+      text-align: center;
+      margin-bottom: 0;
+    }
+
     /* signal bars */
     .signals { display:flex; flex-direction:column; gap:5px; }
     .sig-row  { display:flex; align-items:center; gap:6px; font-size:.68rem; }
@@ -314,6 +326,50 @@
     .tl-sub   { font-size:.68rem; color:var(--muted); font-weight:400; }
     .tl-date  { font-size:.75rem; color:var(--text);  font-weight:500; margin-top:1px; }
     .tl-date.muted { color:var(--muted); font-style:italic; }
+    /* archive-verified dot: slightly different shade to signal richer source */
+    .tl-dot.archive {
+      background: #0ea5e9;
+      box-shadow: 0 0 0 1.5px #0ea5e9;
+    }
+
+    /* ── Skeleton shimmer ────────────────────────────────────────────── */
+    @keyframes shimmer {
+      0%   { background-position: -200% center; }
+      100% { background-position:  200% center; }
+    }
+    .tl-skel-bar {
+      border-radius: 4px;
+      background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s ease infinite;
+    }
+    .tl-item.loading .tl-dot {
+      background: #e2e8f0;
+      box-shadow: 0 0 0 1.5px #e2e8f0;
+      border-color: #e2e8f0;
+    }
+    .tl-item.loading .tl-skel-bar.label { width: 130px; height: 10px; margin-bottom: 4px; }
+    .tl-item.loading .tl-skel-bar.date  { width:  70px; height:  9px; }
+
+    /* spinner in the section title while archive scrape is in-flight */
+    .sec-title-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 8px;
+    }
+    .sec-title-row .sec-title { margin-bottom: 0; }
+    .tl-spinner {
+      display: none;
+      width: 11px; height: 11px;
+      border: 2px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin .75s linear infinite;
+      flex-shrink: 0;
+    }
+    #tl-section[data-loading] .tl-spinner { display: block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     /* ── Nearby cards ────────────────────────────────────────────────── */
     .nearby-row { display:flex; gap:10px; }
@@ -399,7 +455,7 @@
   <div class="panel-head">
     <div>
       <div class="panel-address" id="panel-address">—</div>
-      <div class="panel-subtitle">TAMA38 Analysis</div>
+      <div class="panel-subtitle" id="panel-subtitle">TAMA38 Analysis</div>
     </div>
     <button class="btn-close" id="panel-close" aria-label="Close">&#x2715;</button>
   </div>
@@ -407,7 +463,7 @@
   <div class="panel-body">
 
     <!-- Score + signals -->
-    <div class="score-section">
+    <div class="score-section" id="score-section">
       <div class="score-ring-wrap">
         <svg class="score-svg" viewBox="0 0 100 100">
           <circle cx="50" cy="50" r="38" fill="none" stroke="#e2e8f0" stroke-width="9"/>
@@ -432,7 +488,7 @@
       <div class="completed-check">&#10003;</div>
       <div>
         <div class="completed-title">TAMA38 Completed</div>
-        <div class="completed-sub">This building has already gone through TAMA38</div>
+        <div class="completed-sub" id="completed-sub">This building has already gone through TAMA38</div>
       </div>
     </div>
 
@@ -447,7 +503,10 @@
 
     <!-- Timeline -->
     <div class="panel-section" id="tl-section" style="display:none">
-      <div class="sec-title">Timeline</div>
+      <div class="sec-title-row">
+        <div class="sec-title">Timeline</div>
+        <div class="tl-spinner"></div>
+      </div>
       <div class="tl-list" id="tl-list"></div>
     </div>
 
@@ -608,12 +667,19 @@
       }).addTo(map);
       map.fitBounds(activeLayer.getBounds(), { maxZoom:18, padding:[60,60] });
 
-      // Populate analysis panel
+      // Populate analysis panel with GIS data immediately
       populatePanel(data);
       openPanel();
 
       // Load nearby TAMA38 markers (non-blocking)
       loadNearbyPermits(street, building);
+
+      // Enrich timeline from engineering archive (non-blocking — may take ~10 s)
+      if (data.archive_url) {
+        const _pa = new URL(data.archive_url).searchParams.get("partialAddress") || "";
+        const [_kr, _mb] = _pa.split("_");
+        if (_kr && _mb) enrichTimelineFromArchive(_kr, _mb);
+      }
 
       setStatus(`${data.street}  ${data.building}`, "ok");
 
@@ -688,32 +754,31 @@
     el("p-status").textContent = t.status || "—";
     el("p-track").textContent  = t.track  || "—";
 
+    // Completed mode — hides the probability dashboard
+    setCompletedMode(t.is_completed || false);
+
     // Completed banner
     el("completed-banner").style.display = t.is_completed ? "flex" : "none";
-
-    // Timeline — always show all 4 fixed steps
-    const STEPS = [
-      { key: "form1",  label: "טופס 1",              sub: "בקשת רישוי" },
-      { key: "permit", label: "היתר מילולי חתום",    sub: "הוצאת היתר" },
-      { key: "build",  label: "תחילת בנייה",         sub: "כניסה לביצוע" },
-      { key: "form4",  label: "טופס 4",              sub: "היתר אכלוס" },
-    ];
-    const tl = t.timeline || {};
-    el("tl-section").style.display = "";
-    el("tl-list").innerHTML = STEPS.map(step => {
-      const iso  = tl[step.key];
-      const done = !!iso;
-      const fmt  = done
-        ? new Date(iso).toLocaleDateString("en-GB", {day:"numeric", month:"short", year:"numeric"})
+    if (t.is_completed) {
+      const tlTmp = t.timeline || {};
+      const form4iso = tlTmp.form4;
+      const form4fmt = form4iso
+        ? new Date(form4iso).toLocaleDateString("en-GB", {day:"numeric", month:"short", year:"numeric"})
         : null;
-      return `<div class="tl-item ${done ? "" : "pending"}">
-        <div class="tl-dot ${done ? "" : "empty"}"></div>
-        <div>
-          <div class="tl-label">${esc(step.label)} <span class="tl-sub">— ${esc(step.sub)}</span></div>
-          <div class="tl-date ${done ? "" : "muted"}">${done ? fmt : "לא בוצע"}</div>
-        </div>
-      </div>`;
-    }).join("");
+      el("completed-sub").textContent = form4fmt
+        ? `Completed ${form4fmt} · This building has already gone through TAMA38`
+        : "This building has already gone through TAMA38";
+    }
+
+    // Timeline — 5 steps; permit_verbal + permit_signed come from archive scrape,
+    // fallback to GIS permit date if archive hasn't loaded yet.
+    // Keys: form1, permit_verbal, permit_signed, build, form4
+    // (permit_verbal / permit_signed are populated by enrichTimelineFromArchive)
+    window._gisTl = t.timeline || {};  // keep GIS timeline for fallback
+    window._archiveTl = {};            // reset archive cache on new search
+    const hasTamaPermit = t.status && t.status !== "No TAMA38 permit found";
+    el("tl-section").style.display = hasTamaPermit ? "" : "none";
+    renderTimeline(window._gisTl, {});
 
     // Building info
     el("b-year").textContent   = bi.year   || "—";
@@ -740,6 +805,99 @@
       archiveEl.style.display = "";
     } else {
       archiveEl.style.display = "none";
+    }
+  }
+
+  // ── Completed-mode toggle ─────────────────────────────────────────────────
+
+  function setCompletedMode(on) {
+    el("score-section").classList.toggle("done", on);
+    el("panel-subtitle").textContent = on ? "TAMA38 History" : "TAMA38 Analysis";
+  }
+
+  // ── Timeline rendering ────────────────────────────────────────────────────
+
+  const TL_STEPS = [
+    { key: "form1",         label: "טופס 1",              sub: "בקשת רישוי"     },
+    { key: "permit_verbal", label: "היתר מילולי חתום",    sub: "אישור מילולי"   },
+    { key: "permit_signed", label: "היתר — תכנית חתומה",  sub: "תכנית חתומה"    },
+    { key: "build",         label: "תחילת בנייה",          sub: "כניסה לביצוע"   },
+    { key: "form4",         label: "טופס 4",               sub: "היתר אכלוס"     },
+  ];
+
+  function fmtDate(iso) {
+    return new Date(iso).toLocaleDateString("en-GB", {day:"numeric", month:"short", year:"numeric"});
+  }
+
+  // Steps that come exclusively from the archive scrape (not in GIS data)
+  const ARCHIVE_ONLY_KEYS = new Set(["permit_verbal", "permit_signed"]);
+
+  function renderTimeline(gisTl, archiveTl, loading = false) {
+    // Merge: archive keys take precedence; use GIS permit date as verbal fallback
+    // only once the archive has finished loading (so we don't flash wrong data).
+    const merged = Object.assign({}, gisTl, archiveTl);
+    if (!loading && !merged.permit_verbal && !merged.permit_signed && gisTl.permit) {
+      merged.permit_verbal = gisTl.permit;
+    }
+
+    el("tl-list").innerHTML = TL_STEPS.map(step => {
+      const isArchiveOnly = ARCHIVE_ONLY_KEYS.has(step.key);
+      const iso  = merged[step.key];
+      const done = !!iso;
+
+      // Show skeleton while archive is loading and this step has no data yet
+      if (loading && isArchiveOnly && !done) {
+        return `<div class="tl-item loading">
+          <div class="tl-dot"></div>
+          <div>
+            <div class="tl-skel-bar label"></div>
+            <div class="tl-skel-bar date"></div>
+          </div>
+        </div>`;
+      }
+
+      const src = archiveTl[step.key] ? " archive" : "";
+      const fmt = done ? fmtDate(iso) : null;
+      return `<div class="tl-item ${done ? "" : "pending"}">
+        <div class="tl-dot ${done ? src : "empty"}"></div>
+        <div>
+          <div class="tl-label">${esc(step.label)} <span class="tl-sub">— ${esc(step.sub)}</span></div>
+          <div class="tl-date ${done ? "" : "muted"}">${done ? fmt : "לא בוצע"}</div>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  async function enrichTimelineFromArchive(kRechov, msHayit) {
+    const tlSec = el("tl-section");
+    tlSec.setAttribute("data-loading", "1");
+    renderTimeline(window._gisTl || {}, {}, true);  // skeleton for archive-only rows
+
+    try {
+      const res  = await fetch(`/api/archive_timeline?k_rechov=${enc(kRechov)}&ms_bayit=${enc(msHayit)}`);
+      const data = await res.json();
+      if (res.ok && data.timeline && Object.keys(data.timeline).length) {
+        window._archiveTl = data.timeline;
+        el("tl-section").style.display = "";   // show even if GIS had no permit
+        renderTimeline(window._gisTl || {}, window._archiveTl, false);
+        // If archive shows a completed process, surface completion UI
+        if (data.timeline.form4) {
+          setCompletedMode(true);
+          if (el("completed-banner").style.display === "none") {
+            const fmt = fmtDate(data.timeline.form4);
+            el("completed-sub").textContent =
+              `Completed ${fmt} · This building has already gone through TAMA38`;
+            el("completed-banner").style.display = "flex";
+          }
+        }
+      } else {
+        renderTimeline(window._gisTl || {}, {}, false);
+      }
+    } catch (e) {
+      console.warn("Archive timeline fetch failed:", e);
+      renderTimeline(window._gisTl || {}, {}, false);
+    } finally {
+      tlSec.removeAttribute("data-loading");
     }
   }
 

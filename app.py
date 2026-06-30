@@ -13,7 +13,14 @@ import logging
 from flask import Flask, jsonify, render_template, request
 from sqlalchemy import create_engine, text
 
+import json as _json
+import os as _os
+import subprocess as _subprocess
+import sys as _sys
+
 from tama_score import compute_tama_score
+
+_WORKER = _os.path.join(_os.path.dirname(__file__), "_scrape_worker.py")
 
 app = Flask(__name__)
 
@@ -213,6 +220,7 @@ def search():
     return jsonify({
         "street":        t_rechov,
         "building":      ms_bayit,
+        "k_rechov":      k_rechov,
         "geometry":      json.loads(geom_json),
         "building_info": {"year": year, "floors": ms_komot, "type": t_sug_mivne},
         "archive_url":   archive_url,
@@ -279,5 +287,43 @@ def nearby_permits():
     return jsonify({"type": "FeatureCollection", "features": features})
 
 
+@app.route("/api/archive_timeline")
+def archive_timeline():
+    """
+    Scrape the Tel Aviv engineering archive page for a building and return
+    milestone dates not available in the GIS layer (e.g. verbal vs signed permit).
+
+    Query params: k_rechov, ms_bayit
+    Response: {"timeline": {form1?, permit_verbal?, permit_signed?, build?, form4?}}
+    """
+    k_rechov = request.args.get("k_rechov", "").strip()
+    ms_bayit  = request.args.get("ms_bayit",  "").strip()
+    if not k_rechov or not ms_bayit:
+        return jsonify({"error": "k_rechov and ms_bayit are required"}), 400
+
+    url = (
+        "https://handasa.tel-aviv.gov.il/Pages/SearchResultsAnonPageNew.aspx"
+        f"?partialAddress={k_rechov}_{ms_bayit}"
+    )
+    try:
+        proc = _subprocess.run(
+            [_sys.executable, _WORKER, url],
+            capture_output=True, text=True, timeout=40,
+            cwd=_os.path.dirname(__file__),
+        )
+        timeline = _json.loads(proc.stdout) if proc.stdout.strip() else {}
+    except Exception as exc:
+        log.warning("Archive scrape subprocess failed: %s", exc)
+        timeline = {}
+    return jsonify({"timeline": timeline})
+
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # Pre-compile Playwright's .py files so the Werkzeug watchdog doesn't
+    # detect file changes and restart mid-request when the scraper first runs.
+    import compileall, site as _site
+    for _d in _site.getsitepackages():
+        compileall.compile_dir(_d, quiet=2, force=False)
+
+    # use_reloader=False prevents a second watchdog restart loop
+    app.run(debug=True, port=5000, use_reloader=False)
