@@ -17,8 +17,10 @@ import json as _json
 import os as _os
 import subprocess as _subprocess
 import sys as _sys
+from datetime import date as _date
 
 from tama_score import compute_tama_score
+from ml_score import predict_completion_proba
 
 _WORKER = _os.path.join(_os.path.dirname(__file__), "_scrape_worker.py")
 
@@ -117,7 +119,9 @@ def search():
                     a.t_rechov, a.ms_bayit::text, a.k_rechov,
                     ST_AsGeoJSON(ST_Transform(b.geometry, 4326))  AS geom_json,
                     ST_AsText(a.geometry)                         AS addr_wkt,
-                    b.year::int, b.ms_komot::int, b.t_sug_mivne
+                    b.year::int, b.ms_komot::int, b.t_sug_mivne,
+                    ST_Y(ST_Transform(a.geometry, 4326))          AS lat,
+                    ST_X(ST_Transform(a.geometry, 4326))          AS lon
                 FROM "TLV".addresses  a
                 JOIN "TLV".buildings  b ON ST_DWithin(a.geometry, b.geometry, 1)
                 WHERE a.t_rechov ILIKE :street AND a.ms_bayit::text = :building
@@ -134,7 +138,9 @@ def search():
                     t_rechov, ms_bayit::text, k_rechov,
                     ST_AsGeoJSON(ST_Transform(geometry, 4326)) AS geom_json,
                     ST_AsText(geometry)                        AS addr_wkt,
-                    NULL AS year, NULL AS ms_komot, NULL AS t_sug_mivne
+                    NULL AS year, NULL AS ms_komot, NULL AS t_sug_mivne,
+                    ST_Y(ST_Transform(geometry, 4326))         AS lat,
+                    ST_X(ST_Transform(geometry, 4326))         AS lon
                 FROM "TLV".addresses
                 WHERE t_rechov ILIKE :street AND ms_bayit::text = :building
                 LIMIT 1
@@ -143,7 +149,7 @@ def search():
     if not row:
         return jsonify({"error": "Address not found"}), 404
 
-    t_rechov, ms_bayit, k_rechov, geom_json, addr_wkt, year, ms_komot, t_sug_mivne = row
+    t_rechov, ms_bayit, k_rechov, geom_json, addr_wkt, year, ms_komot, t_sug_mivne, lat, lon = row
 
     # ── 2. TAMA38 analysis ────────────────────────────────────────────────────
     permits         = []
@@ -211,6 +217,42 @@ def search():
             "to enable full TAMA38 analysis."
         )
 
+    # ── 3. ML completion probability (only for in-progress permits) ────────────
+    ml_proba = None
+    has_active_permit = (
+        tama.get("status") != "No TAMA38 permit found"
+        and not tama.get("is_completed")
+    )
+    if has_active_permit:
+        try:
+            tl = tama.get("timeline", {})
+            today = _date.today()
+
+            def _iso_days(a_str, b_str=None):
+                if not a_str:
+                    return None
+                a = _date.fromisoformat(a_str)
+                b = _date.fromisoformat(b_str) if b_str else today
+                return (b - a).days
+
+            ml_features = {
+                "days_since_form1":     _iso_days(tl.get("form1")),
+                "days_form1_to_permit": _iso_days(tl.get("form1"), tl.get("permit")),
+                "days_permit_to_build": _iso_days(tl.get("permit"), tl.get("build")),
+                "has_permit":           int(bool(tl.get("permit"))),
+                "has_construction":     int(bool(tl.get("build"))),
+                "building_year":        year,
+                "building_floors":      ms_komot,
+                "is_track2":            int(any(
+                    p.get("sw_tama_38_chadash") == "כן" for p in permits
+                )),
+                "lat": float(lat) if lat else None,
+                "lon": float(lon) if lon else None,
+            }
+            ml_proba = predict_completion_proba(ml_features)
+        except Exception as exc:
+            log.debug("ML prediction skipped: %s", exc)
+
     archive_url = (
         f"https://handasa.tel-aviv.gov.il/Pages/SearchResultsAnonPageNew.aspx"
         f"?partialAddress={k_rechov}_{ms_bayit}"
@@ -225,6 +267,7 @@ def search():
         "building_info": {"year": year, "floors": ms_komot, "type": t_sug_mivne},
         "archive_url":   archive_url,
         "tama":          tama,
+        "ml_proba":      ml_proba,
     })
 
 
@@ -284,6 +327,73 @@ def nearby_permits():
         }
         for r in rows
     ]
+    return jsonify({"type": "FeatureCollection", "features": features})
+
+
+@app.route("/api/neighborhood_stats")
+def neighborhood_stats():
+    """
+    Return per-neighborhood TAMA38 completion statistics as a GeoJSON
+    FeatureCollection.  Requires TLV.neighborhoods to be populated via
+    fetch_neighborhoods.py.
+    """
+    try:
+        with engine.connect() as conn:
+            has_nbhd = conn.execute(text("""
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'TLV' AND table_name = 'neighborhoods'
+            """)).fetchone()
+            if not has_nbhd:
+                return jsonify({"error": "Neighborhood data not loaded"}), 404
+
+            rows = conn.execute(text("""
+                SELECT
+                    n.shem_shkuna                                AS neighborhood,
+                    COUNT(p.ctid)                                AS total,
+                    COUNT(p.ctid) FILTER (WHERE
+                        p.finished IS NOT NULL
+                        OR p.building_stage IN (
+                            'קיים אכלוס', 'קיימת לפחות תעודת גמר אחת'
+                        )
+                    )                                            AS completed,
+                    AVG(
+                        (p.permission_date - p.open_request) / 86400000.0
+                    ) FILTER (
+                        WHERE p.permission_date IS NOT NULL
+                          AND p.open_request    IS NOT NULL
+                    )                                            AS avg_days_to_permit,
+                    ST_AsGeoJSON(ST_Transform(n.geometry, 4326)) AS geom_json
+                FROM "TLV".neighborhoods n
+                JOIN "TLV".permits p
+                    ON ST_Within(p.geometry, n.geometry)
+                WHERE (
+                    p.sw_tama_38         = 'כן'
+                 OR p.sw_tama_38_chadash = 'כן'
+                 OR p.sw_tama_38_tosefet = 'כן'
+                )
+                GROUP BY n.shem_shkuna, n.geometry
+                HAVING COUNT(p.ctid) > 0
+                ORDER BY completed DESC
+            """)).fetchall()
+    except Exception as exc:
+        log.warning("neighborhood_stats failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+    features = []
+    for row in rows:
+        total     = int(row[1]) if row[1] else 0
+        completed = int(row[2]) if row[2] else 0
+        features.append({
+            "type": "Feature",
+            "geometry": json.loads(row[4]) if row[4] else None,
+            "properties": {
+                "neighborhood":       row[0],
+                "total":              total,
+                "completed":          completed,
+                "completion_rate":    round(completed / total, 3) if total else 0,
+                "avg_days_to_permit": round(float(row[3]), 0) if row[3] else None,
+            },
+        })
     return jsonify({"type": "FeatureCollection", "features": features})
 
 

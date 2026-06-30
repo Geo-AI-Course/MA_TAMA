@@ -4,3 +4,6 @@ sqlalchemy>=2.0
 psycopg2-binary>=2.9
 flask>=3.0
 playwright>=1.44
+scikit-learn>=1.4
+pandas>=2.0
+numpy>=1.26

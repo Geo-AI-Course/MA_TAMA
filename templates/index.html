@@ -231,10 +231,47 @@
       margin-bottom: 10px;
     }
 
+    /* ── ML completion forecast ──────────────────────────────────────────── */
+    .ml-forecast {
+      margin-top: 8px;
+      padding: 7px 10px;
+      background: rgba(37,99,235,.05);
+      border: 1px solid rgba(37,99,235,.18);
+      border-radius: var(--radius);
+      font-size: .72rem;
+    }
+    .ml-forecast-label {
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 5px;
+    }
+    .ml-badge {
+      display: inline-block;
+      background: var(--primary);
+      color: #fff;
+      font-size: .58rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .ml-bar-wrap {
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 4px;
+    }
+    .ml-bar { height:100%; border-radius:3px; transition:width .9s ease; width:0%; }
+    .ml-pct { font-weight:700; font-size:.78rem; }
+
     /* ── Completed-mode overrides for the score section ────────────────── */
     .score-section.done .score-ring-wrap { display: none; }
     .score-section.done .score-right { width: 100%; }
     .score-section.done .signals { display: none; }
+    .score-section.done .ml-forecast { display: none; }
     .score-section.done .outlook-badge {
       display: block;
       font-size: .85rem;
@@ -480,6 +517,16 @@
       <div class="score-right">
         <div class="outlook-badge" id="outlook-badge">—</div>
         <div class="signals" id="signals"></div>
+        <!-- ML completion probability — shown only for in-progress permits -->
+        <div class="ml-forecast" id="ml-forecast" style="display:none">
+          <div class="ml-forecast-label">
+            <span class="ml-badge">ML</span> Completion Forecast
+          </div>
+          <div class="ml-bar-wrap">
+            <div class="ml-bar" id="ml-bar"></div>
+          </div>
+          <span class="ml-pct" id="ml-pct">—</span>
+        </div>
       </div>
     </div>
 
@@ -805,6 +852,27 @@
       archiveEl.style.display = "";
     } else {
       archiveEl.style.display = "none";
+    }
+
+    // ML completion forecast — only for in-progress buildings that have a permit
+    const mlEl  = el("ml-forecast");
+    const mlBar = el("ml-bar");
+    const mlPct = el("ml-pct");
+    const mlProba = data.ml_proba;
+    if (mlProba !== null && mlProba !== undefined && !t.is_completed &&
+        t.status && t.status !== "No TAMA38 permit found") {
+      const pct   = Math.round(mlProba * 100);
+      const color = pct >= 65 ? "#22c55e" : pct >= 40 ? "#f59e0b" : "#ef4444";
+      mlEl.style.display = "";
+      mlBar.style.background = color;
+      mlBar.style.width = "0%";
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        mlBar.style.width = pct + "%";
+      }));
+      mlPct.textContent = `${pct}% probability of reaching Form 4`;
+      mlPct.style.color = color;
+    } else {
+      mlEl.style.display = "none";
     }
   }
 
