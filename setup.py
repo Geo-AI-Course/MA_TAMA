@@ -306,6 +306,48 @@ def check_neighborhoods():
 
 # ── Step 7 — Engineering Archive scrape ──────────────────────────────────────
 
+def _load_archive_seed(conn):
+    """Load data/archive_timelines.csv into the table when the table is empty."""
+    import csv
+    from sqlalchemy import text
+    from datetime import datetime, timezone
+
+    seed = HERE / "data" / "archive_timelines.csv"
+    if not seed.exists():
+        return
+
+    step("Loading archive seed data from data/archive_timelines.csv")
+    with open(seed, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    def _d(v):
+        return v if v not in ("", "None") else None
+
+    loaded = 0
+    for r in rows:
+        conn.execute(text("""
+            INSERT INTO "TLV".archive_timelines
+                (k_rechov, ms_bayit, form1, permit_verbal, permit_signed,
+                 build, form4, scraped_at, gis_fingerprint)
+            VALUES (:k, :m, :f1, :pv, :ps, :b, :f4, :ts, :fp)
+            ON CONFLICT (k_rechov, ms_bayit) DO NOTHING
+        """), {
+            "k":  int(r["k_rechov"]),
+            "m":  r["ms_bayit"],
+            "f1": _d(r["form1"]),
+            "pv": _d(r["permit_verbal"]),
+            "ps": _d(r["permit_signed"]),
+            "b":  _d(r["build"]),
+            "f4": _d(r["form4"]),
+            "ts": _d(r["scraped_at"]) or datetime.now(tz=timezone.utc).isoformat(),
+            "fp": _d(r["gis_fingerprint"]),
+        })
+        loaded += 1
+    conn.commit()
+    ok(f"Seed data loaded: {loaded:,} buildings")
+
+
 def check_archive_scrape(skip: bool, archive_refresh_days: int = 30):
     section("Engineering Archive scrape")
 
@@ -329,6 +371,14 @@ def check_archive_scrape(skip: bool, archive_refresh_days: int = 30):
             """)).scalar() or 0
         except Exception:
             total = 0
+
+        # ── Seed from CSV if table is empty ───────────────────────────────────
+        if not _table_exists(conn, "archive_timelines") or conn.execute(
+            text('SELECT COUNT(*) FROM "TLV".archive_timelines')
+        ).scalar() == 0:
+            from fetch_archive_bulk import _ensure_table
+            _ensure_table(conn)
+            _load_archive_seed(conn)
 
         scraped = 0
         if _table_exists(conn, "archive_timelines"):
