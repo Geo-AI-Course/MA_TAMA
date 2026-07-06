@@ -87,7 +87,7 @@ This single script handles everything in order:
 5. Enables PostGIS, creates the `TLV` schema
 6. Fetches GIS layers from Tel Aviv ArcGIS (re-fetches if older than 7 days)
 7. Downloads Tel Aviv neighborhood boundaries
-8. Runs the Engineering Archive bulk scrape (4–6 hours; safe to interrupt and resume)
+8. Auto-loads `data/archive_timelines.csv` seed data if the table is empty (instant); reports freshness and changed-building count if data already exists
 9. Trains the ML model
 10. Launches the Flask web app
 
@@ -215,12 +215,13 @@ The completion-probability model is a `HistGradientBoostingClassifier` (scikit-l
 5. Cross-validate (skipped if minority class < 10 samples; retrain after bulk scrape)
 6. Fit on full dataset and save `tama_model.pkl`
 
-**Current training data** (grows as archive scrape progresses):
-- ~195 completed buildings  
-- ~5 stalled buildings  
-- Duration statistics: median Form 1 → Form 4 = 5.9 years; p90 = 7.4 years
+**Current training data** (full Engineering Archive scrape — 2,946 buildings):
+- 228 completed buildings (received Form 4)
+- 5 stalled buildings (exceeded p90 × 1.3 threshold)
+- Duration statistics: median Form 1 → Form 4 = **5.5 years**; p90 = **7.2 years**
+- Cross-validation skipped — only 5 stalled examples; not enough for stable CV
 
-The model improves as `fetch_archive_bulk.py` scrapes more buildings (~2,900 total).
+The stalled class is small because most active TAMA38 projects in Tel Aviv are still within their expected timeframe.  The model will improve as more projects stall or complete over time; re-run `python train_tama_model.py` to update it.
 
 ---
 
