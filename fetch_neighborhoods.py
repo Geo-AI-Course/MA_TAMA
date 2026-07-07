@@ -85,14 +85,22 @@ def _load_into_db(geojson: dict):
                 continue
             # Possible field names for the Hebrew neighborhood name
             name = (
-                props.get("SHEM_SHKUNA")
+                props.get("shem_shchuna")
+                or props.get("SHEM_SHCHUNA")
+                or props.get("SHEM_SHKUNA")
                 or props.get("shem_shkuna")
                 or props.get("SHEM")
                 or props.get("NAME")
                 or props.get("name")
                 or ""
             )
-            ms_sh = props.get("MS_SHKUNA") or props.get("ms_shkuna") or props.get("OBJECTID")
+            ms_sh = (
+                props.get("ms_shchuna")
+                or props.get("MS_SHCHUNA")
+                or props.get("MS_SHKUNA")
+                or props.get("ms_shkuna")
+                or props.get("OBJECTID")
+            )
             conn.execute(text("""
                 INSERT INTO "TLV".neighborhoods (shem_shkuna, ms_shkuna, geometry)
                 VALUES (

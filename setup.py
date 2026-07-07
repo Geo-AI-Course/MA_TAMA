@@ -480,10 +480,11 @@ def check_model(skip: bool):
         warn("Skipped (--skip-train).  ML completion forecast will be unavailable.")
         return
 
-    model_pkl = HERE / "tama_model.pkl"
-    meta_json = HERE / "tama_model_meta.json"
+    model_pkl      = HERE / "tama_model.pkl"
+    meta_json      = HERE / "tama_model_meta.json"
+    likelihood_pkl = HERE / "tama_likelihood_model.pkl"
 
-    needs_train = not model_pkl.exists()
+    needs_train = not model_pkl.exists() or not likelihood_pkl.exists()
 
     if not needs_train:
         # Retrain if GIS data was refreshed more recently than the model

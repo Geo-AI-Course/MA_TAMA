@@ -21,7 +21,12 @@ import sys as _sys
 from datetime import date as _date
 
 from tama_score import compute_tama_score
-from ml_score import predict_completion_proba, duration_stats as _ml_duration_stats
+from ml_score import (
+    predict_completion_proba,
+    predict_likelihood_proba,
+    completion_narrative,
+    duration_stats as _ml_duration_stats,
+)
 
 _WORKER = _os.path.join(_os.path.dirname(__file__), "_scrape_worker.py")
 
@@ -204,6 +209,18 @@ def search():
     except Exception as exc:
         log.warning("Building sites query failed (%s)", exc)
 
+    neighborhood = None
+    try:
+        with engine.connect() as conn:
+            nbhd = conn.execute(text("""
+                SELECT shem_shkuna FROM "TLV".neighborhoods
+                WHERE ST_Within(ST_SetSRID(ST_GeomFromText(:wkt), 2039), geometry)
+                LIMIT 1
+            """), {"wkt": addr_wkt}).fetchone()
+            neighborhood = nbhd[0] if nbhd else None
+    except Exception as exc:
+        log.debug("Neighborhood lookup failed (%s) — table not loaded yet?", exc)
+
     tama = compute_tama_score(
         permits=permits,
         year=year,
@@ -219,7 +236,8 @@ def search():
         )
 
     # ── 3. ML completion probability (only for in-progress permits) ────────────
-    ml_proba = None
+    ml_proba    = None
+    ml_narrative = None
     has_active_permit = (
         tama.get("status") != "No TAMA38 permit found"
         and not tama.get("is_completed")
@@ -253,10 +271,29 @@ def search():
                 )),
                 "lat": float(lat) if lat else None,
                 "lon": float(lon) if lon else None,
+                "neighborhood": neighborhood,
             }
-            ml_proba = predict_completion_proba(ml_features)
+            ml_proba     = predict_completion_proba(ml_features)
+            ml_narrative = completion_narrative(ml_features)
         except Exception as exc:
             log.debug("ML prediction skipped: %s", exc)
+
+    # ── 3b. ML likelihood estimate (buildings without any TAMA38 permit) ───────
+    ml_likelihood_proba = None
+    if tama.get("status") == "No TAMA38 permit found":
+        try:
+            ml_likelihood_proba = predict_likelihood_proba({
+                "building_year":   year,
+                "building_floors": ms_komot,
+                "nearby_200m":     nearby_200m,
+                "nearby_500m":     nearby_500m,
+                "has_open_site":   int(has_open_site),
+                "lat": float(lat) if lat else None,
+                "lon": float(lon) if lon else None,
+                "neighborhood": neighborhood,
+            })
+        except Exception as exc:
+            log.debug("ML likelihood prediction skipped: %s", exc)
 
     archive_url = (
         f"https://handasa.tel-aviv.gov.il/Pages/SearchResultsAnonPageNew.aspx"
@@ -273,6 +310,8 @@ def search():
         "archive_url":   archive_url,
         "tama":          tama,
         "ml_proba":      ml_proba,
+        "ml_narrative":  ml_narrative,
+        "ml_likelihood_proba": ml_likelihood_proba,
     })
 
 

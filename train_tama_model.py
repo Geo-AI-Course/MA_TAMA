@@ -425,16 +425,22 @@ def assign_labels(df: pd.DataFrame, stats: dict) -> pd.DataFrame:
 
 # ── Neighbourhood analysis ────────────────────────────────────────────────────
 
-def neighborhood_analysis(df: pd.DataFrame) -> pd.DataFrame:
+def neighborhood_analysis(df: pd.DataFrame) -> dict:
+    """
+    Per-neighbourhood completion rate + typical total duration, computed from
+    completed/stalled TAMA38 projects only.  Returned as a plain dict so it can
+    be persisted alongside the model (used at inference time to phrase the
+    completion-forecast narrative — see `completion_narrative` in ml_score.py).
+    """
     if "neighborhood" not in df.columns or df["neighborhood"].isna().all():
         log.warning("No neighborhood data — run fetch_neighborhoods.py first")
-        return pd.DataFrame()
+        return {}
 
     grp = df.dropna(subset=["neighborhood"]).copy()
     grp = grp[grp["is_completed"] | grp["is_stalled"]]
 
     if grp.empty:
-        return pd.DataFrame()
+        return {}
 
     stats = (
         grp.groupby("neighborhood")
@@ -449,7 +455,19 @@ def neighborhood_analysis(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     log.info("\n=== Neighbourhood Analysis ===\n%s", stats.to_string(index=False))
-    return stats
+
+    result = {}
+    for _, row in stats.iterrows():
+        result[row["neighborhood"]] = {
+            "total":             int(row["total"]),
+            "completed":         int(row["completed"]),
+            "completion_rate":   float(row["completion_rate"]),
+            "median_days_total": (
+                round(float(row["median_days_total"]), 1)
+                if pd.notna(row["median_days_total"]) else None
+            ),
+        }
+    return result
 
 
 # ── Model training ────────────────────────────────────────────────────────────
@@ -544,8 +562,9 @@ def main():
         )
         sys.exit(1)
 
-    # Neighbourhood analysis
-    neighborhood_analysis(df)
+    # Neighbourhood analysis — persisted so ml_score.py can phrase the
+    # completion-forecast narrative ("most projects in {neighborhood}...")
+    nbhd_stats = neighborhood_analysis(df)
 
     # Full feature set
     used_features = _BASE_FEATURES + _TIME_RATIO_FEATURES
@@ -569,28 +588,158 @@ def main():
     # Save model
     with open(MODEL_PATH, "wb") as f:
         pickle.dump({
-            "pipeline":      pipe,
-            "feature_cols":  used_features,
-            "nbhd_classes":  nbhd_classes,
-            "duration_stats": dur_stats,
+            "pipeline":         pipe,
+            "feature_cols":     used_features,
+            "nbhd_classes":     nbhd_classes,
+            "duration_stats":   dur_stats,
+            "neighborhood_stats": nbhd_stats,
         }, f)
 
     meta = {
-        "feature_cols":   used_features,
-        "nbhd_classes":   nbhd_classes,
-        "duration_stats": dur_stats,
-        "trained_at":     datetime.now(timezone.utc).isoformat(),
-        "n_completed":    int(labelled["label"].sum()),
-        "n_stalled":      int((labelled["label"] == 0).sum()),
-        "cv_roc_auc":     round(roc_auc, 4),
-        "cv_accuracy":    round(accuracy, 4),
-        "importances":    imps,
+        "feature_cols":     used_features,
+        "nbhd_classes":     nbhd_classes,
+        "duration_stats":   dur_stats,
+        "neighborhood_stats": nbhd_stats,
+        "trained_at":       datetime.now(timezone.utc).isoformat(),
+        "n_completed":      int(labelled["label"].sum()),
+        "n_stalled":        int((labelled["label"] == 0).sum()),
+        "cv_roc_auc":       round(roc_auc, 4),
+        "cv_accuracy":      round(accuracy, 4),
+        "importances":      imps,
     }
     with open(META_PATH, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
 
     log.info("Saved model → %s", MODEL_PATH)
     log.info("Saved meta  → %s", META_PATH)
+
+    # ── Likelihood model — citywide, works for buildings without a permit ──────
+    train_likelihood_model()
+
+
+# ── Likelihood model (buildings without an active TAMA38 permit) ─────────────
+#
+# Predicts how "TAMA38-like" a building looks based on signals available for
+# EVERY address citywide (age, floors, permit density nearby, open sites,
+# neighbourhood) — trained against the label "does this address already have
+# a TAMA38 permit", which acts as a data-driven stand-in for "is this the kind
+# of building that gets picked for TAMA38".
+
+LIKELIHOOD_MODEL_PATH = Path(__file__).parent / "tama_likelihood_model.pkl"
+LIKELIHOOD_META_PATH  = Path(__file__).parent / "tama_likelihood_model_meta.json"
+
+_LIKELIHOOD_FEATURES = [
+    "building_year", "building_floors",
+    "nearby_200m", "nearby_500m", "has_open_site",
+    "lat", "lon",
+]
+
+
+def load_likelihood_raw(conn) -> pd.DataFrame:
+    has_nbhd = _has_table(conn, "TLV", "neighborhoods")
+    nbhd_join = """
+        LEFT JOIN "TLV".neighborhoods n ON ST_Within(a.geometry, n.geometry)
+    """ if has_nbhd else ""
+    nbhd_col = "n.shem_shkuna" if has_nbhd else "NULL"
+
+    sql = f"""
+        SELECT
+            a.k_rechov, a.ms_bayit,
+            b.year AS building_year, b.ms_komot AS building_floors,
+            ST_Y(ST_Transform(a.geometry, 4326)) AS lat,
+            ST_X(ST_Transform(a.geometry, 4326)) AS lon,
+            {nbhd_col} AS neighborhood,
+            (SELECT COUNT(*) FROM "TLV".permits p
+              WHERE ST_DWithin(p.geometry, a.geometry, 200)
+                AND NOT ST_DWithin(p.geometry, a.geometry, 5))  AS nearby_200m,
+            (SELECT COUNT(*) FROM "TLV".permits p
+              WHERE ST_DWithin(p.geometry, a.geometry, 500)
+                AND NOT ST_DWithin(p.geometry, a.geometry, 5))  AS nearby_500m,
+            EXISTS (
+                SELECT 1 FROM "TLV".building_sites s
+                WHERE ST_DWithin(s.geometry, a.geometry, 5)
+            ) AS has_open_site,
+            EXISTS (
+                SELECT 1 FROM "TLV".permits p
+                WHERE ST_DWithin(p.geometry, a.geometry, 5)
+                  AND (p.sw_tama_38 = 'כן' OR p.sw_tama_38_chadash = 'כן'
+                       OR p.sw_tama_38_tosefet = 'כן')
+            ) AS has_tama38
+        FROM "TLV".addresses a
+        LEFT JOIN LATERAL (
+            SELECT year, ms_komot FROM "TLV".buildings b
+            WHERE ST_DWithin(a.geometry, b.geometry, 1)
+            ORDER BY ST_Distance(a.geometry, b.geometry) LIMIT 1
+        ) b ON true
+        {nbhd_join}
+    """
+    df = pd.read_sql(text(sql), conn)
+    log.info("Loaded %d addresses for the likelihood model", len(df))
+    return df
+
+
+def engineer_likelihood(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["building_year"]   = pd.to_numeric(df["building_year"],   errors="coerce")
+    df["building_floors"] = pd.to_numeric(df["building_floors"], errors="coerce")
+    df["nearby_200m"]      = pd.to_numeric(df["nearby_200m"], errors="coerce")
+    df["nearby_500m"]      = pd.to_numeric(df["nearby_500m"], errors="coerce")
+    df["has_open_site"]    = df["has_open_site"].astype(float)
+    df["lat"]              = pd.to_numeric(df["lat"], errors="coerce")
+    df["lon"]              = pd.to_numeric(df["lon"], errors="coerce")
+    df["label"]            = df["has_tama38"].astype(int)
+    return df
+
+
+def train_likelihood_model():
+    with engine.connect() as conn:
+        raw = load_likelihood_raw(conn)
+
+    df = engineer_likelihood(raw)
+
+    log.info(
+        "Likelihood labels — has TAMA38: %d   no TAMA38: %d   total: %d",
+        int(df["label"].sum()), int((df["label"] == 0).sum()), len(df),
+    )
+
+    used_features = list(_LIKELIHOOD_FEATURES)
+    nbhd_classes  = []
+    if "neighborhood" in df.columns and not df["neighborhood"].isna().all():
+        le = LabelEncoder()
+        df["neighborhood_enc"] = le.fit_transform(
+            df["neighborhood"].fillna("Unknown")
+        ).astype(float)
+        used_features = used_features + ["neighborhood_enc"]
+        nbhd_classes  = list(le.classes_)
+
+    X = df[used_features].copy()
+    y = df["label"]
+
+    pipe, roc_auc, accuracy = train(X, y)
+    imps = feature_importances(pipe, used_features)
+
+    with open(LIKELIHOOD_MODEL_PATH, "wb") as f:
+        pickle.dump({
+            "pipeline":     pipe,
+            "feature_cols": used_features,
+            "nbhd_classes": nbhd_classes,
+        }, f)
+
+    meta = {
+        "feature_cols":  used_features,
+        "nbhd_classes":  nbhd_classes,
+        "trained_at":    datetime.now(timezone.utc).isoformat(),
+        "n_positive":    int(y.sum()),
+        "n_negative":    int((y == 0).sum()),
+        "cv_roc_auc":    round(roc_auc, 4),
+        "cv_accuracy":   round(accuracy, 4),
+        "importances":   imps,
+    }
+    with open(LIKELIHOOD_META_PATH, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2, ensure_ascii=False)
+
+    log.info("Saved likelihood model → %s", LIKELIHOOD_MODEL_PATH)
+    log.info("Saved likelihood meta  → %s", LIKELIHOOD_META_PATH)
 
 
 if __name__ == "__main__":

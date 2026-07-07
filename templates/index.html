@@ -266,6 +266,13 @@
     }
     .ml-bar { height:100%; border-radius:3px; transition:width .9s ease; width:0%; }
     .ml-pct { font-weight:700; font-size:.78rem; }
+    .ml-narrative {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: .68rem;
+      font-weight: 400;
+      line-height: 1.35;
+    }
 
     /* ── Completed-mode overrides for the score section ────────────────── */
     .score-section.done .score-ring-wrap { display: none; }
@@ -555,6 +562,17 @@
             <div class="ml-bar" id="ml-bar"></div>
           </div>
           <span class="ml-pct" id="ml-pct">—</span>
+          <div class="ml-narrative" id="ml-narrative"></div>
+        </div>
+        <!-- ML likelihood estimate — shown only when no TAMA38 permit exists yet -->
+        <div class="ml-forecast" id="ml-likelihood" style="display:none">
+          <div class="ml-forecast-label">
+            <span class="ml-badge">ML</span> Likelihood Estimate
+          </div>
+          <div class="ml-bar-wrap">
+            <div class="ml-bar" id="ml-likelihood-bar"></div>
+          </div>
+          <span class="ml-pct" id="ml-likelihood-pct">—</span>
         </div>
       </div>
     </div>
@@ -1031,8 +1049,30 @@
       }));
       mlPct.textContent = `${pct}% probability of reaching Form 4`;
       mlPct.style.color = color;
+      el("ml-narrative").textContent = data.ml_narrative || "";
     } else {
       mlEl.style.display = "none";
+    }
+
+    // ML likelihood estimate — only for buildings with no TAMA38 permit yet
+    const mlLikeEl  = el("ml-likelihood");
+    const mlLikeBar = el("ml-likelihood-bar");
+    const mlLikePct = el("ml-likelihood-pct");
+    const mlLikelihood = data.ml_likelihood_proba;
+    if (mlLikelihood !== null && mlLikelihood !== undefined &&
+        t.status === "No TAMA38 permit found") {
+      const pct   = Math.round(mlLikelihood * 100);
+      const color = pct >= 50 ? "#22c55e" : pct >= 25 ? "#f59e0b" : "#ef4444";
+      mlLikeEl.style.display = "";
+      mlLikeBar.style.background = color;
+      mlLikeBar.style.width = "0%";
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        mlLikeBar.style.width = pct + "%";
+      }));
+      mlLikePct.textContent = `${pct}% ML-estimated likelihood of TAMA38, based on similar buildings citywide`;
+      mlLikePct.style.color = color;
+    } else {
+      mlLikeEl.style.display = "none";
     }
   }
 
